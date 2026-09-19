@@ -20,3 +20,6 @@ obj/
 # os
 Thumbs.db
 .DS_Store
+
+# local preview build
+.preview/
