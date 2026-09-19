@@ -95,6 +95,13 @@ field in error.
   payload *and* current server state, so the client can preserve the user's
   unsaved work as the spec requires, rather than returning a bare 409.
 
+## Not yet in place
+
+**No test harness.** The Angular 22 scaffold defaults to vitest, whose peer
+dependency tree crashes npm 10's resolver (`Cannot read properties of null
+(reading 'edgesOut')`). The test stack was left out rather than shipped broken.
+Add it back deliberately — either on npm 12+, or with Jest/Karma instead.
+
 ## Known scope decisions
 
 Three open items from the specification review remain unresolved and are
