@@ -1,7 +1,7 @@
 import { Component, ChangeDetectionStrategy, signal, inject, HostListener } from '@angular/core';
 import { RouterLink, RouterLinkActive } from '@angular/router';
-import { ThemeService } from '../../core/theme.service';
-import { NAV_ITEMS } from '../../core/nav';
+import { ThemeService } from '../../../core/services/theme.service';
+import { SITE_NAV } from '../../../core/models/nav.model';
 
 @Component({
   selector: 'app-site-header',
@@ -13,7 +13,7 @@ import { NAV_ITEMS } from '../../core/nav';
 })
 export class SiteHeader {
   protected readonly theme = inject(ThemeService);
-  protected readonly navItems = NAV_ITEMS;
+  protected readonly navItems = SITE_NAV;
 
   protected readonly menuOpen = signal(false);
   protected readonly scrolled = signal(false);

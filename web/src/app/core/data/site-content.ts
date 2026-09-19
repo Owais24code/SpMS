@@ -1,4 +1,4 @@
-import type { FaqItem } from '../shared/faq-accordion/faq-accordion';
+import type { FaqItem } from '../../shared/components/faq-accordion/faq-accordion';
 
 export interface Capability {
   readonly id: string;

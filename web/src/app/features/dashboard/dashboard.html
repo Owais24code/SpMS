@@ -1,0 +1,119 @@
+<app-page-header
+  eyebrow="Riverside Spa"
+  title="Good afternoon, Owais"
+  subtitle="Five arrivals in the next hour and one booking conflict waiting on a decision."
+>
+  <button type="button" class="btn btn--secondary">Export day</button>
+  <a class="btn btn--primary" routerLink="/app/schedule">Open schedule</a>
+</app-page-header>
+
+<div class="stack">
+  <section class="grid grid--kpi" aria-label="Key figures">
+    @for (k of kpis; track k.label) {
+      <app-stat-card [label]="k.label" [value]="k.value" [delta]="k.delta" [trend]="k.trend" [tone]="k.tone" [hint]="k.hint" />
+    }
+  </section>
+
+  <section class="grid grid--split">
+    <!-- week chart -->
+    <div class="panel">
+      <div class="panel__head">
+        <span class="panel__title">Bookings this week</span>
+        <span class="panel__hint">Property local</span>
+        <div class="panel__actions">
+          <button type="button" class="chip" aria-pressed="true">7 days</button>
+          <button type="button" class="chip" aria-pressed="false">30 days</button>
+        </div>
+      </div>
+      <div class="panel__body">
+        <div class="chart" role="img"
+             aria-label="Bookings rose from 52 on Monday to a peak of 95 on Saturday, easing to 71 on Sunday.">
+          @for (v of bookings; track $index) {
+            <div class="chart__col">
+              <span class="chart__bar" [style.height]="height(v)">
+                <span class="chart__value numeric">{{ v }}</span>
+              </span>
+              <span class="chart__label">{{ labels[$index] }}</span>
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+
+    <!-- conflict -->
+    <div class="panel">
+      <div class="panel__head">
+        <span class="panel__title">Needs a decision</span>
+        <span class="badge badge--warn">Soft</span>
+      </div>
+      <div class="panel__body stack">
+        <p class="conflict__summary">{{ conflict.summary }}</p>
+        <p class="conflict__consequence">{{ conflict.consequence }}</p>
+
+        <div>
+          <p class="subtle">Alternatives</p>
+          <ul class="alts">
+            @for (a of conflict.alternatives; track a) { <li>{{ a }}</li> }
+          </ul>
+        </div>
+
+        <div class="row">
+          <a class="btn btn--primary" routerLink="/app/schedule">Resolve</a>
+          <button type="button" class="btn btn--ghost">Snooze</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- arrivals -->
+  <section class="panel">
+    <div class="panel__head">
+      <span class="panel__title">Next arrivals</span>
+      <div class="panel__actions">
+        <a class="btn btn--secondary" routerLink="/app/check-in">All arrivals</a>
+      </div>
+    </div>
+    <div class="panel__body panel__body--flush">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">Time</th>
+              <th scope="col">Guest</th>
+              <th scope="col">Service</th>
+              <th scope="col">Forms</th>
+              <th scope="col">Deposit</th>
+              <th scope="col">Room</th>
+              <th scope="col"><span class="visually-hidden">Action</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (a of arrivals; track a.id) {
+              <tr>
+                <td class="numeric">{{ a.time }}</td>
+                <td>{{ a.guestAlias }}</td>
+                <td>{{ a.service }}</td>
+                <td>
+                  <span class="badge" [class.badge--ok]="a.formsComplete" [class.badge--warn]="!a.formsComplete">
+                    {{ a.formsComplete ? 'Complete' : 'Outstanding' }}
+                  </span>
+                </td>
+                <td>
+                  <span class="badge" [class.badge--ok]="a.depositSettled" [class.badge--warn]="!a.depositSettled">
+                    {{ a.depositSettled ? 'Settled' : 'Due' }}
+                  </span>
+                </td>
+                <td>
+                  <span class="badge" [class.badge--ok]="a.roomReady" [class.badge--neutral]="!a.roomReady">
+                    {{ a.roomReady ? 'Ready' : 'Turnover' }}
+                  </span>
+                </td>
+                <td><button type="button" class="btn btn--ghost">Check in</button></td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</div>

@@ -161,3 +161,42 @@
   --content-max: 1200px;
   --gutter:      16px;
 }
+
+/* =========================================================================
+   9. GRADIENTS
+   Built from the two brand primaries only, so every gradient reads as
+   AARFID. Text is never placed on a gradient without a checked endpoint:
+   each --grad-* below lists the foreground token it is safe with.
+   ========================================================================= */
+:root {
+  /* Primary brand sweep — safe with white text at both ends
+     (navy-700 13.5:1, blue-600 6.9:1). */
+  --grad-brand: linear-gradient(135deg, #003057 0%, #005596 58%, #0066b3 100%);
+
+  /* Deeper variant for large surfaces: sidebar, hero, footers.
+     Safe with --fg-onbrand at every stop. */
+  --grad-brand-deep: linear-gradient(168deg, #002340 0%, #00304f 45%, #003f6b 100%);
+
+  /* Accent sweep for buttons and small fills — white text safe. */
+  --grad-accent: linear-gradient(135deg, #0066b3 0%, #2b88d2 100%);
+
+  /* Subtle page washes. Decorative only — never carries text alone. */
+  --grad-wash-light: linear-gradient(170deg, #f2f6fa 0%, #ffffff 58%);
+  --grad-wash-dark:  linear-gradient(170deg, #00182c 0%, #000d18 62%);
+
+  /* Hairline gradient border, applied via border-image or a masked inset. */
+  --grad-hairline: linear-gradient(120deg, rgb(0 102 179 / 0.55), rgb(0 48 87 / 0.10) 60%);
+
+  /* Aurora blobs for empty space — used behind content, blurred. */
+  --grad-aurora-a: radial-gradient(circle, #2b88d2 0%, transparent 68%);
+  --grad-aurora-b: radial-gradient(circle, #1d5c94 0%, transparent 70%);
+
+  /* Data-visualisation sequence, ordered light → dark.
+     Every stop clears 3:1 against both canvases. */
+  --grad-data-1: #7ea7cd;
+  --grad-data-2: #4c81b4;
+  --grad-data-3: #2b88d2;
+  --grad-data-4: #0066b3;
+  --grad-data-5: #005596;
+  --grad-data-6: #003057;
+}

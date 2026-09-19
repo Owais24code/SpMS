@@ -1,7 +1,7 @@
 import { Component, ChangeDetectionStrategy } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { FaqAccordion } from '../../shared/faq-accordion/faq-accordion';
-import { CAPABILITIES, FAQ_ITEMS } from '../../core/content';
+import { FaqAccordion } from '../../../shared/components/faq-accordion/faq-accordion';
+import { CAPABILITIES, FAQ_ITEMS } from '../../../core/data/site-content';
 
 @Component({
   selector: 'app-home',

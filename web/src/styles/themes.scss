@@ -56,6 +56,10 @@
   --glass-shadow: 0 8px 32px rgb(0 24 44 / 0.12);
 
   --scrim: rgb(0 13 24 / 0.52);
+
+  --grad-page:    var(--grad-wash-light);
+  --grad-surface: linear-gradient(160deg, #ffffff 0%, #f7f9fb 100%);
+  --grad-rail:    var(--grad-brand-deep);
 }
 
 @mixin dark-theme {
@@ -106,6 +110,10 @@
   --glass-shadow: 0 8px 32px rgb(0 0 0 / 0.45);
 
   --scrim: rgb(0 8 16 / 0.68);
+
+  --grad-page:    var(--grad-wash-dark);
+  --grad-surface: linear-gradient(160deg, #001d34 0%, #00182c 100%);
+  --grad-rail:    linear-gradient(168deg, #001424 0%, #00182c 50%, #002038 100%);
 }
 
 :root                      { @include light-theme; }

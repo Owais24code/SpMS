@@ -1,0 +1,142 @@
+<app-page-header
+  eyebrow="Riverside Spa"
+  title="Schedule"
+  subtitle="Drag to move an appointment, or use Move on a focused card — both paths run the same preflight before anything commits."
+>
+  <button type="button" class="btn btn--secondary">Print run sheet</button>
+  <button type="button" class="btn btn--primary">New appointment</button>
+</app-page-header>
+
+<div class="stack">
+  <div class="toolbar">
+    <div class="seg" role="group" aria-label="View range">
+      <button type="button" [attr.aria-pressed]="view() === 'day'"  (click)="view.set('day')">Day</button>
+      <button type="button" [attr.aria-pressed]="view() === 'week'" (click)="view.set('week')">Week</button>
+    </div>
+
+    <button type="button" class="chip">Fri 19 Sep</button>
+    <button type="button" class="chip" aria-pressed="true">All providers</button>
+    <button type="button" class="chip">All rooms</button>
+
+    <span class="row--end row">
+      <span class="badge badge--info">3 conflicts</span>
+      <span class="subtle">Refreshed 12s ago</span>
+    </span>
+  </div>
+
+  <div class="board">
+    <div class="board__hours" aria-hidden="true">
+      <span class="board__corner"></span>
+      <div class="board__scale">
+        @for (h of hours; track h) { <span class="numeric">{{ h }}</span> }
+      </div>
+    </div>
+
+    @for (lane of lanes; track lane.name) {
+      <div class="lane">
+        <div class="lane__head">
+          <span class="lane__name">{{ lane.name }}</span>
+          <span class="lane__role">{{ lane.role }}</span>
+        </div>
+
+        <div class="lane__track">
+          @for (h of hours; track h) { <span class="lane__gridline"></span> }
+
+          @for (slot of lane.slots; track slot.label + slot.startPct) {
+            <button
+              type="button"
+              class="slot"
+              [class]="'slot--' + slot.state"
+              [style.--start.%]="slot.startPct"
+              [style.--len.%]="slot.widthPct"
+              (click)="slot.state === 'conflict' ? open(hard) : null"
+            >
+              <span class="slot__label">{{ slot.label }}</span>
+            </button>
+          }
+        </div>
+      </div>
+    }
+  </div>
+
+  <p class="legend">
+    <span class="legend__key slot--booked"></span> Booked
+    <span class="legend__key slot--in-progress"></span> In progress
+    <span class="legend__key slot--complete"></span> Complete
+    <span class="legend__key slot--conflict"></span> Conflict
+    <span class="legend__key slot--turnover"></span> Turnover
+    <span class="legend__key slot--blocked"></span> Blocked
+  </p>
+</div>
+
+<!-- ========================= CONFLICT DRAWER ========================= -->
+@if (drawer(); as c) {
+  <div class="drawer-scrim" (click)="close()" aria-hidden="true"></div>
+
+  <aside class="cdrawer" role="dialog" aria-labelledby="cdrawer-title" aria-modal="true">
+    <header class="cdrawer__head">
+      <span class="badge" [class.badge--warn]="c.severity === 'soft'" [class.badge--danger]="c.severity === 'hard'">
+        {{ c.severity === 'soft' ? 'Soft conflict' : 'Hard conflict' }}
+      </span>
+      <button type="button" class="cdrawer__close" (click)="close()" aria-label="Close conflict panel">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+        </svg>
+      </button>
+    </header>
+
+    <div class="cdrawer__body stack">
+      <div>
+        <h2 class="cdrawer__title" id="cdrawer-title">{{ c.summary }}</h2>
+        <p class="cdrawer__code numeric">{{ c.code }}</p>
+      </div>
+
+      <div class="cdrawer__consequence" [class.is-hard]="c.severity === 'hard'">
+        <p class="subtle">What happens if you continue</p>
+        <p>{{ c.consequence }}</p>
+      </div>
+
+      <div>
+        <p class="subtle">Alternatives</p>
+        <ul class="cdrawer__alts">
+          @for (a of c.alternatives; track a) {
+            <li><button type="button">{{ a }}</button></li>
+          }
+        </ul>
+      </div>
+
+      @if (c.severity === 'soft') {
+        <div>
+          <label for="reason">Reason for override <span class="req">*</span></label>
+          <textarea
+            id="reason" rows="3"
+            placeholder="Why is this acceptable? This is recorded against your name."
+            [value]="reason()"
+            (input)="reason.set($any($event.target).value)"
+          ></textarea>
+          <p class="subtle">Overrides are audited and visible to the spa manager.</p>
+        </div>
+      } @else {
+        <div class="cdrawer__blocked">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M6 11V8a6 6 0 1 1 12 0v3M5 11h14v9H5z" fill="none" stroke="currentColor"
+                  stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <p>A room cannot hold two treatments at once. No role can override this — choose an alternative above.</p>
+        </div>
+      }
+    </div>
+
+    <footer class="cdrawer__foot">
+      <button type="button" class="btn btn--ghost" (click)="close()">Cancel</button>
+      <button
+        type="button"
+        class="btn btn--primary"
+        [disabled]="!canCommit()"
+        [attr.aria-disabled]="!canCommit()"
+      >
+        {{ c.severity === 'hard' ? 'Cannot commit' : 'Override and commit' }}
+      </button>
+    </footer>
+  </aside>
+}

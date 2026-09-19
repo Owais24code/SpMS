@@ -1,6 +1,6 @@
 import { Component, ChangeDetectionStrategy } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { NAV_ITEMS } from '../../core/nav';
+import { SITE_NAV } from '../../../core/models/nav.model';
 
 @Component({
   selector: 'app-site-footer',
@@ -39,6 +39,6 @@ import { NAV_ITEMS } from '../../core/nav';
   styleUrl: './site-footer.scss',
 })
 export class SiteFooter {
-  protected readonly navItems = NAV_ITEMS;
+  protected readonly navItems = SITE_NAV;
   protected readonly year = new Date().getFullYear();
 }

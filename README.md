@@ -7,9 +7,39 @@ Built against the **UX Field Specification v1.1** (UX-001 … UX-012) and the
 
 ```
 SpMS/
-  web/     Angular 22 — marketing surface + shared design-token layer
+  web/     Angular 22 — public site, workspace and the shared token layer
   api/     .NET 10 — domain foundation (permissions, codes, concurrency)
 ```
+
+### Front-end structure
+
+```
+web/src/app/
+  core/          services, view models, placeholder data — no UI
+    services/    theme
+    models/      navigation, spa view models
+    data/        placeholder content
+  shared/        reusable UI with no feature knowledge
+    components/  page header, stat card, state panel, badges, site chrome
+    directives/  highlight
+    pipes/       property date, duration
+  layouts/
+    site-layout/ public shell — header, footer, banner, floating contact
+    app-layout/  workspace shell — left sidebar, top bar, breadcrumb
+  features/      one folder per screen, lazy-loaded
+    site/        home, contact
+    dashboard/ schedule/ check-in/ treatments/ booking/ appointments/
+    messaging/ inventory/ devices/ staff/ reconciliation/ reports/
+    integrations/ settings/ not-found/
+```
+
+Standalone components with per-feature lazy routes, rather than NgModules —
+`app.routes.ts` composes the two layouts and their children. Every screen is
+its own bundle, so the workspace never loads the public site and vice versa.
+
+Screens carry almost no CSS of their own: `styles/app.scss` provides the
+workspace primitives (`.panel`, `.table`, `.toolbar`, `.badge`, `.meter`,
+`.timeline`, `.form-grid`), so a new screen is mostly markup.
 
 ## Getting started
 
@@ -33,6 +63,11 @@ npm run audit:contrast   # WCAG 2.2 AA token audit — exits non-zero on failure
 | `tokens.scss` | Brand primitives, ramps, semantic colors, type, space, motion |
 | `themes.scss` | Light/dark semantic mapping — components use **only** these |
 | `base.scss` | Reset, focus, containers, glass, buttons |
+| `app.scss` | Workspace primitives — panel, table, toolbar, badge, meter, timeline |
+
+Gradients live in `tokens.scss` under `--grad-*`, all derived from the two
+brand primaries. Each one documents the foreground token it is contrast-safe
+with, so text is never placed on a sweep that has not been checked.
 
 Components never reference a ramp value (`--blue-500`) directly; they use the
 semantic token (`--bg-accent`). That is what makes the dark theme a single

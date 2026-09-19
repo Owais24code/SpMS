@@ -1,0 +1,154 @@
+<a class="skip-link" href="#workspace">Skip to content</a>
+
+<!-- =========================== LEFT SIDEBAR =========================== -->
+<aside
+  class="rail"
+  [class.rail--collapsed]="collapsed()"
+  [class.rail--open]="drawerOpen()"
+  aria-label="Workspace"
+>
+  <div class="rail__brand">
+    <a routerLink="/app" class="rail__logo" (click)="closeDrawer()" aria-label="SpMS workspace home">
+      <svg viewBox="0 0 40 24" aria-hidden="true" focusable="false">
+        <path d="M2 6h14M2 12h10M2 18h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" />
+        <path d="M22 19 30 5l8 14z" fill="currentColor" />
+      </svg>
+      @if (!collapsed()) { <span>SpMS</span> }
+    </a>
+
+    <button
+      type="button"
+      class="rail__collapse"
+      (click)="toggleRail()"
+      [attr.aria-label]="collapsed() ? 'Expand sidebar' : 'Collapse sidebar'"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path [attr.d]="collapsed() ? 'M9 6l6 6-6 6' : 'M15 6l-6 6 6 6'"
+              fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    </button>
+  </div>
+
+  <nav class="rail__nav">
+    @for (group of groups; track group.label) {
+      <div class="rail__group">
+        @if (!collapsed()) { <p class="rail__group-label">{{ group.label }}</p> }
+        <ul>
+          @for (item of group.items; track item.path) {
+            <li>
+              <a
+                [routerLink]="item.path"
+                routerLinkActive="is-active"
+                [routerLinkActiveOptions]="{ exact: item.path === '/app' }"
+                (click)="closeDrawer()"
+                [attr.title]="collapsed() ? item.label : null"
+              >
+                <svg class="rail__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path [attr.d]="item.icon" fill="none" stroke="currentColor" stroke-width="1.7"
+                        stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                @if (!collapsed()) {
+                  <span class="rail__label">{{ item.label }}</span>
+                  @if (item.badge) { <span class="rail__badge numeric">{{ item.badge }}</span> }
+                } @else if (item.badge) {
+                  <span class="rail__dot" aria-hidden="true"></span>
+                  <span class="visually-hidden">{{ item.badge }} needing attention</span>
+                }
+              </a>
+            </li>
+          }
+        </ul>
+      </div>
+    }
+  </nav>
+
+  <div class="rail__foot">
+    <a routerLink="/" class="rail__exit" (click)="closeDrawer()" [attr.title]="collapsed() ? 'Public site' : null">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M14 4h5v16h-5M10 8l-4 4 4 4M6 12h9" fill="none" stroke="currentColor"
+              stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+      @if (!collapsed()) { <span>Public site</span> }
+    </a>
+  </div>
+</aside>
+
+@if (drawerOpen()) {
+  <div class="rail-scrim" (click)="closeDrawer()" aria-hidden="true"></div>
+}
+
+<!-- ============================== MAIN ============================== -->
+<div class="shell" [class.shell--collapsed]="collapsed()">
+  <!-- top bar -->
+  <header class="topbar">
+    <button
+      type="button"
+      class="topbar__burger"
+      (click)="toggleDrawer()"
+      [attr.aria-expanded]="drawerOpen()"
+      aria-label="Open navigation"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+      </svg>
+    </button>
+
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a routerLink="/app">Workspace</a></li>
+        <li aria-current="page">{{ current() }}</li>
+      </ol>
+    </nav>
+
+    <div class="topbar__search">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14M20 20l-4-4"
+              fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      </svg>
+      <input type="search" placeholder="Search guests, rooms, staff…" aria-label="Search the workspace" />
+      <kbd>/</kbd>
+    </div>
+
+    <div class="topbar__actions">
+      <button type="button" class="icon-btn" aria-label="Notifications">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M18 15V10a6 6 0 1 0-12 0v5l-2 3h16zM10 21h4" fill="none" stroke="currentColor"
+                stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <span class="icon-btn__dot" aria-hidden="true"></span>
+        <span class="visually-hidden">3 unread</span>
+      </button>
+
+      <button
+        type="button"
+        class="icon-btn"
+        (click)="theme.toggle()"
+        [attr.aria-label]="theme.resolved() === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'"
+      >
+        @if (theme.resolved() === 'dark') {
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="4.4" fill="currentColor" />
+            <path d="M12 2v2.6M12 19.4V22M2 12h2.6M19.4 12H22M4.9 4.9l1.9 1.9M17.2 17.2l1.9 1.9M19.1 4.9l-1.9 1.9M6.8 17.2l-1.9 1.9"
+                  stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        } @else {
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M20 14.2A8.2 8.2 0 0 1 9.8 4a8.4 8.4 0 1 0 10.2 10.2" fill="currentColor" />
+          </svg>
+        }
+      </button>
+
+      <div class="account">
+        <span class="account__avatar" aria-hidden="true">OK</span>
+        <span class="account__text">
+          <span class="account__name">Owais K.</span>
+          <span class="account__role">Riverside Spa</span>
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <main id="workspace" class="workspace" tabindex="-1">
+    <router-outlet />
+  </main>
+</div>
