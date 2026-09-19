@@ -3,9 +3,9 @@ import { Routes } from '@angular/router';
 /** Public marketing surface. */
 const siteRoutes: Routes = [
   { path: '',         title: 'AARFID SpMS — Spa Management System', loadComponent: () => import('./features/site/home/home').then((m) => m.Home) },
-  { path: 'platform', title: 'Platform — AARFID SpMS',              loadComponent: () => import('./features/site/home/home').then((m) => m.Home) },
-  { path: 'modules',  title: 'Modules — AARFID SpMS',               loadComponent: () => import('./features/site/home/home').then((m) => m.Home) },
-  { path: 'faq',      title: 'FAQ — AARFID SpMS',                   loadComponent: () => import('./features/site/home/home').then((m) => m.Home) },
+  { path: 'platform', title: 'Platform — AARFID SpMS',              loadComponent: () => import('./features/site/platform/platform').then((m) => m.Platform) },
+  { path: 'modules',  title: 'Modules — AARFID SpMS',               loadComponent: () => import('./features/site/modules/modules').then((m) => m.Modules) },
+  { path: 'faq',      title: 'FAQ — AARFID SpMS',                   loadComponent: () => import('./features/site/faq/faq').then((m) => m.Faq) },
   { path: 'contact',  title: 'Contact — AARFID SpMS',               loadComponent: () => import('./features/site/contact/contact').then((m) => m.Contact) },
 ];
 

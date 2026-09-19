@@ -26,6 +26,7 @@ import { SITE_NAV } from '../../../core/models/nav.model';
         </nav>
 
         <div class="ft__contact">
+          <a routerLink="/app">Workspace</a>
           <a href="tel:+17169923999" class="numeric">716-992-3999</a>
           <a href="https://aarfid.com" rel="noopener">aarfid.com</a>
         </div>

@@ -52,6 +52,15 @@
         }
       </button>
 
+      <a class="btn btn--ghost hdr__workspace" routerLink="/app">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M4 13h7V4H4zM13 8h7V4h-7zM13 20h7v-9h-7zM4 20h7v-5H4z"
+                fill="none" stroke="currentColor" stroke-width="1.7"
+                stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        Workspace
+      </a>
+
       <a class="btn btn--primary hdr__cta" routerLink="/contact">Book a demo</a>
 
       <button
@@ -109,6 +118,7 @@
   </nav>
 
   <div class="drawer__foot">
+    <a class="btn btn--secondary btn--lg" routerLink="/app" (click)="closeMenu()">Open workspace</a>
     <a class="btn btn--primary btn--lg" routerLink="/contact" (click)="closeMenu()">Book a demo</a>
     <p class="drawer__note">Talk to us about your property — 716-992-3999</p>
   </div>
