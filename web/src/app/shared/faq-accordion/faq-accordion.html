@@ -1,0 +1,36 @@
+<ul class="faq">
+  @for (item of items(); track item.q; let i = $index) {
+    <li class="faq__item" [class.faq__item--open]="isOpen(i)">
+      <h3 class="faq__heading">
+        <button
+          type="button"
+          class="faq__trigger"
+          [id]="idPrefix() + '-btn-' + i"
+          [attr.aria-expanded]="isOpen(i)"
+          [attr.aria-controls]="idPrefix() + '-panel-' + i"
+          (click)="toggle(i)"
+        >
+          <span class="faq__q">{{ item.q }}</span>
+          <span class="faq__chevron" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path d="M6 9.5 12 15l6-5.5" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </span>
+        </button>
+      </h3>
+
+      <div
+        class="faq__panel"
+        [id]="idPrefix() + '-panel-' + i"
+        role="region"
+        [attr.aria-labelledby]="idPrefix() + '-btn-' + i"
+        [attr.inert]="isOpen(i) ? null : ''"
+      >
+        <div class="faq__panel-inner">
+          <p>{{ item.a }}</p>
+        </div>
+      </div>
+    </li>
+  }
+</ul>

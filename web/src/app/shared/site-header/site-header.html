@@ -1,0 +1,115 @@
+<header class="hdr" [class.hdr--scrolled]="scrolled()">
+  <div class="hdr__inner container">
+    <a class="brand" routerLink="/" (click)="closeMenu()" aria-label="AARFID SpMS — home">
+      <svg class="brand__mark" viewBox="0 0 40 24" aria-hidden="true" focusable="false">
+        <path d="M2 6h14M2 12h10M2 18h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" />
+        <path d="M22 19 30 5l8 14z" fill="currentColor" />
+      </svg>
+      <span class="brand__text">
+        <span class="brand__name">AARFID</span>
+        <span class="brand__product">SpMS</span>
+      </span>
+    </a>
+
+    <nav class="hdr__nav" aria-label="Primary">
+      <ul>
+        @for (item of navItems; track item.path) {
+          <li>
+            <a
+              [routerLink]="item.path"
+              routerLinkActive="is-active"
+              [routerLinkActiveOptions]="{ exact: item.path === '/' }"
+            >{{ item.label }}</a>
+          </li>
+        }
+      </ul>
+    </nav>
+
+    <div class="hdr__actions">
+      <button
+        type="button"
+        class="icon-btn"
+        (click)="theme.toggle()"
+        [attr.aria-label]="
+          theme.resolved() === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'
+        "
+      >
+        @if (theme.resolved() === 'dark') {
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="4.4" fill="currentColor" />
+            <path
+              d="M12 2v2.6M12 19.4V22M2 12h2.6M19.4 12H22M4.9 4.9l1.9 1.9M17.2 17.2l1.9 1.9M19.1 4.9l-1.9 1.9M6.8 17.2l-1.9 1.9"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round"
+            />
+          </svg>
+        } @else {
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path
+              d="M20 14.2A8.2 8.2 0 0 1 9.8 4a8.4 8.4 0 1 0 10.2 10.2"
+              fill="currentColor"
+            />
+          </svg>
+        }
+      </button>
+
+      <a class="btn btn--primary hdr__cta" routerLink="/contact">Book a demo</a>
+
+      <button
+        type="button"
+        class="icon-btn hdr__burger"
+        (click)="toggleMenu()"
+        [attr.aria-expanded]="menuOpen()"
+        aria-controls="mobile-drawer"
+        [attr.aria-label]="menuOpen() ? 'Close menu' : 'Open menu'"
+      >
+        @if (menuOpen()) {
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+          </svg>
+        } @else {
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+          </svg>
+        }
+      </button>
+    </div>
+  </div>
+</header>
+
+@if (menuOpen()) {
+  <div class="drawer-scrim" (click)="closeMenu()" aria-hidden="true"></div>
+}
+
+<aside
+  id="mobile-drawer"
+  class="drawer"
+  [class.drawer--open]="menuOpen()"
+  [attr.inert]="menuOpen() ? null : ''"
+  aria-label="Site menu"
+>
+  <nav aria-label="Mobile">
+    <ul class="drawer__list">
+      @for (item of navItems; track item.path) {
+        <li>
+          <a
+            [routerLink]="item.path"
+            routerLinkActive="is-active"
+            [routerLinkActiveOptions]="{ exact: item.path === '/' }"
+            (click)="closeMenu()"
+          >
+            <svg class="drawer__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path [attr.d]="item.icon" fill="none" stroke="currentColor" stroke-width="1.8"
+                    stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span>{{ item.label }}</span>
+          </a>
+        </li>
+      }
+    </ul>
+  </nav>
+
+  <div class="drawer__foot">
+    <a class="btn btn--primary btn--lg" routerLink="/contact" (click)="closeMenu()">Book a demo</a>
+    <p class="drawer__note">Talk to us about your property — 716-992-3999</p>
+  </div>
+</aside>

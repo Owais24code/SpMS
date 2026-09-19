@@ -1,0 +1,131 @@
+<section class="section">
+  <div class="container contact">
+    <!-- ------------------------- aside ------------------------- -->
+    <aside class="contact__aside">
+      <p class="eyebrow">Contact</p>
+      <h1 class="contact__title">Let's look at your property</h1>
+      <p class="contact__lede">
+        Tell us how many treatment rooms and providers you run, and which systems already
+        own your rooms and payments. We will come back with specifics, not a brochure.
+      </p>
+
+      <ul class="contact__list">
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M5 4h3l1.6 4-2 1.4a12 12 0 0 0 5.5 5.5l1.4-2 4 1.6v3a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 3 6.2 2 2 0 0 1 5 4Z"
+                  fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+          </svg>
+          <div>
+            <span class="contact__label">Phone</span>
+            <a href="tel:+17169923999" class="numeric">716-992-3999</a>
+          </div>
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M4 6h16v12H4zM4 7l8 6 8-6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+          </svg>
+          <div>
+            <span class="contact__label">Email</span>
+            <a href="mailto:info&#64;aarfid.com">info&#64;aarfid.com</a>
+          </div>
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18ZM12 7v5l3.2 2"
+                  fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+          </svg>
+          <div>
+            <span class="contact__label">Hours</span>
+            <span>Weekdays, 9am – 6pm ET</span>
+          </div>
+        </li>
+      </ul>
+    </aside>
+
+    <!-- ------------------------- form ------------------------- -->
+    <div class="contact__card">
+      @if (state() === 'success') {
+        <div class="notice notice--success" role="status">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M5 12.5 10 17l9-10" fill="none" stroke="currentColor" stroke-width="2.2"
+                  stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <div>
+            <p class="notice__title">Message sent</p>
+            <p class="notice__copy">We'll reply to you within one business day.</p>
+          </div>
+        </div>
+      }
+
+      @if (state() === 'error') {
+        <div class="notice notice--error" role="alert">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 4 2.5 20h19zM12 10v4M12 17h.01" fill="none" stroke="currentColor"
+                  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <div>
+            <p class="notice__title">We couldn't send that</p>
+            <p class="notice__copy">
+              Your message is still here. Try again, or call us on 716-992-3999.
+            </p>
+          </div>
+        </div>
+      }
+
+      <form [formGroup]="form" (ngSubmit)="submit()" novalidate>
+        <div class="field">
+          <label for="name">Your name <span class="req" aria-hidden="true">*</span></label>
+          <input
+            id="name" type="text" formControlName="name" autocomplete="name"
+            [attr.aria-invalid]="hasError('name')"
+            [attr.aria-describedby]="hasError('name') ? 'name-err' : null"
+          />
+          @if (hasError('name')) {
+            <p class="field__err" id="name-err">{{ errorFor('name') }}</p>
+          }
+        </div>
+
+        <div class="field">
+          <label for="email">Work email <span class="req" aria-hidden="true">*</span></label>
+          <input
+            id="email" type="email" formControlName="email" autocomplete="email"
+            [attr.aria-invalid]="hasError('email')"
+            [attr.aria-describedby]="hasError('email') ? 'email-err' : null"
+          />
+          @if (hasError('email')) {
+            <p class="field__err" id="email-err">{{ errorFor('email') }}</p>
+          }
+        </div>
+
+        <div class="field">
+          <label for="property">Property or group <span class="opt">(optional)</span></label>
+          <input id="property" type="text" formControlName="property" autocomplete="organization" />
+        </div>
+
+        <div class="field">
+          <label for="message">What would you like to see? <span class="req" aria-hidden="true">*</span></label>
+          <textarea
+            id="message" rows="5" formControlName="message"
+            [attr.aria-invalid]="hasError('message')"
+            [attr.aria-describedby]="hasError('message') ? 'message-err' : null"
+          ></textarea>
+          @if (hasError('message')) {
+            <p class="field__err" id="message-err">{{ errorFor('message') }}</p>
+          }
+        </div>
+
+        <button
+          type="submit"
+          class="btn btn--primary btn--lg contact__submit"
+          [disabled]="state() === 'submitting'"
+        >
+          {{ state() === 'submitting' ? 'Sending…' : 'Send message' }}
+        </button>
+
+        <p class="contact__fineprint">
+          We use your details only to reply. Required fields are marked with an asterisk.
+        </p>
+      </form>
+    </div>
+  </div>
+</section>

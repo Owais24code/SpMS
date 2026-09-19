@@ -1,0 +1,50 @@
+<div class="fab-wrap">
+  <div
+    class="fab-panel glass"
+    [class.fab-panel--open]="open()"
+    [attr.inert]="open() ? null : ''"
+    role="dialog"
+    aria-label="Contact options"
+  >
+    <p class="fab-panel__title">Talk to us</p>
+    <p class="fab-panel__copy">Weekdays, 9am–6pm ET. We usually reply the same day.</p>
+
+    <a class="fab-panel__row" href="tel:+17169923999">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M5 4h3l1.6 4-2 1.4a12 12 0 0 0 5.5 5.5l1.4-2 4 1.6v3a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 3 6.2 2 2 0 0 1 5 4Z"
+              fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+      </svg>
+      <span>716-992-3999</span>
+    </a>
+
+    <a class="fab-panel__row" href="mailto:info&#64;aarfid.com">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 6h16v12H4zM4 7l8 6 8-6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+      </svg>
+      <span>info&#64;aarfid.com</span>
+    </a>
+
+    <a class="btn btn--primary fab-panel__cta" routerLink="/contact" (click)="open.set(false)">
+      Send a message
+    </a>
+  </div>
+
+  <button
+    type="button"
+    class="fab"
+    (click)="toggle()"
+    [attr.aria-expanded]="open()"
+    [attr.aria-label]="open() ? 'Close contact options' : 'Open contact options'"
+  >
+    @if (open()) {
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+      </svg>
+    } @else {
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4L4 21l1.1-3.6A8.4 8.4 0 1 1 21 11.5Z"
+              fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" />
+      </svg>
+    }
+  </button>
+</div>

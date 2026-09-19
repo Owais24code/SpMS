@@ -1,0 +1,31 @@
+<section class="nf">
+  <div class="nf__bg" aria-hidden="true">
+    <span class="nf__orb"></span>
+  </div>
+
+  <div class="container nf__inner">
+    <p class="nf__code numeric" aria-hidden="true">404</p>
+
+    <h1 class="nf__title">We couldn't find that page</h1>
+    <p class="nf__copy">
+      The link may be out of date, or the page may have moved. Nothing you were doing has
+      been lost — pick up from one of these instead.
+    </p>
+
+    <div class="nf__actions">
+      <a class="btn btn--primary btn--lg" routerLink="/">Back to overview</a>
+      <button type="button" class="btn btn--secondary btn--lg" (click)="goBack()">
+        Go back
+      </button>
+    </div>
+
+    <nav class="nf__links" aria-label="Suggested pages">
+      <p class="nf__links-title">Or try:</p>
+      <ul>
+        @for (item of navItems; track item.path) {
+          <li><a [routerLink]="item.path">{{ item.label }}</a></li>
+        }
+      </ul>
+    </nav>
+  </div>
+</section>

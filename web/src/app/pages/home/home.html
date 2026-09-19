@@ -1,0 +1,135 @@
+<!-- ============================ HERO ============================ -->
+<section class="hero">
+  <div class="hero__bg" aria-hidden="true">
+    <span class="hero__orb hero__orb--a"></span>
+    <span class="hero__orb hero__orb--b"></span>
+    <span class="hero__grid"></span>
+  </div>
+
+  <div class="container hero__inner">
+    <div class="hero__copy">
+      <p class="eyebrow">Spa Management System</p>
+      <h1 class="hero__title">
+        Every treatment, room and credential
+        <span class="hero__title-accent">accounted for.</span>
+      </h1>
+      <p class="hero__lede">
+        SpMS runs spa scheduling, guest arrival, treatment delivery and linen readiness on
+        one authoritative record, built on the AARFID credential platform.
+      </p>
+
+      <div class="hero__actions">
+        <a class="btn btn--primary btn--lg" routerLink="/contact">Book a demo</a>
+        <a class="btn btn--secondary btn--lg" routerLink="/platform">See how it works</a>
+      </div>
+
+      <dl class="hero__stats">
+        <div><dt>Surfaces</dt><dd class="numeric">4</dd></div>
+        <div><dt>Core screens</dt><dd class="numeric">12</dd></div>
+        <div><dt>Accessibility</dt><dd>WCAG 2.2 AA</dd></div>
+      </dl>
+    </div>
+
+    <div class="hero__panel glass" role="img"
+         aria-label="Illustration of the SpMS scheduling board showing three provider lanes with booked appointments and one flagged conflict.">
+      <div class="board">
+        <div class="board__head">
+          <span class="board__dot"></span>
+          <span class="board__title">Scheduling board</span>
+          <span class="board__date numeric">Today</span>
+        </div>
+
+        <div class="board__lanes">
+          <div class="lane">
+            <span class="lane__name">Lena K.</span>
+            <div class="lane__track">
+              <span class="slot slot--ok"  style="--start: 4%;  --len: 30%">Aromatherapy</span>
+              <span class="slot slot--ok"  style="--start: 42%; --len: 26%">Deep tissue</span>
+            </div>
+          </div>
+          <div class="lane">
+            <span class="lane__name">Marco R.</span>
+            <div class="lane__track">
+              <span class="slot slot--ok"   style="--start: 12%; --len: 22%">Hot stone</span>
+              <span class="slot slot--warn" style="--start: 56%; --len: 30%">Conflict</span>
+            </div>
+          </div>
+          <div class="lane">
+            <span class="lane__name">Suite 3</span>
+            <div class="lane__track">
+              <span class="slot slot--muted" style="--start: 8%;  --len: 24%">Turnover</span>
+              <span class="slot slot--ok"    style="--start: 40%; --len: 34%">Couples</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="board__alert">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 4 2.5 20h19zM12 10v4M12 17h.01" fill="none" stroke="currentColor"
+                  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>Soft conflict — override needs a reason</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= CAPABILITIES ========================= -->
+<section class="section" id="capabilities">
+  <div class="container">
+    <header class="sec-head">
+      <p class="eyebrow">What it covers</p>
+      <h2 class="sec-head__title">One record, every surface</h2>
+      <p class="sec-head__lede">
+        Front desk, provider, housekeeping and guest all read the same state — with each
+        one seeing only what their role and relationship permit.
+      </p>
+    </header>
+
+    <ul class="cards">
+      @for (cap of capabilities; track cap.id) {
+        <li class="card">
+          <span class="card__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path [attr.d]="cap.icon" fill="none" stroke="currentColor" stroke-width="1.7"
+                    stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </span>
+          <p class="card__id numeric">{{ cap.id }}</p>
+          <h3 class="card__title">{{ cap.title }}</h3>
+          <p class="card__copy">{{ cap.copy }}</p>
+        </li>
+      }
+    </ul>
+  </div>
+</section>
+
+<!-- ============================= FAQ ============================= -->
+<section class="section section--alt" id="faq">
+  <div class="container faq-layout">
+    <header class="sec-head sec-head--start">
+      <p class="eyebrow">FAQ</p>
+      <h2 class="sec-head__title">Questions we get asked</h2>
+      <p class="sec-head__lede">
+        Still unsure about something? We answer specifics rather than generalities.
+      </p>
+      <a class="btn btn--secondary" routerLink="/contact">Ask us directly</a>
+    </header>
+
+    <app-faq-accordion [items]="faqItems" idPrefix="home-faq" />
+  </div>
+</section>
+
+<!-- ============================= CTA ============================= -->
+<section class="cta">
+  <div class="container cta__inner glass glass--dark">
+    <div>
+      <h2 class="cta__title">See SpMS against your own property</h2>
+      <p class="cta__copy">
+        We will walk a booking, a conflict and a check-in using your service catalogue.
+      </p>
+    </div>
+    <a class="btn btn--primary btn--lg" routerLink="/contact">Book a demo</a>
+  </div>
+</section>

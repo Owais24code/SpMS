@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>AARFID SpMS — Spa Management System</title>
+    <base href="/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta
+      name="description"
+      content="AARFID SpMS — scheduling, check-in, treatment delivery and readiness for spa and leisure properties, built on AARFID credential technology."
+    />
+    <meta name="theme-color" content="#003057" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#000d18" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href="favicon.ico" />
+    <script>
+      // Applied before first paint so the theme never flashes.
+      (function () {
+        try {
+          var stored = localStorage.getItem('spms-theme');
+          if (stored === 'light' || stored === 'dark') {
+            document.documentElement.setAttribute('data-theme', stored);
+          }
+        } catch (e) { /* storage blocked — fall back to OS preference */ }
+      })();
+    </script>
+  </head>
+  <body>
+    <app-root></app-root>
+  </body>
+</html>

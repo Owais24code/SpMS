@@ -1,0 +1,85 @@
+:host { display: block; }
+
+.faq {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.faq__item {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-canvas);
+  overflow: hidden;
+  transition: border-color var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
+
+  &:hover { border-color: var(--border-default); }
+
+  &--open {
+    border-color: var(--border-accent);
+    box-shadow: var(--shadow-sm);
+  }
+}
+
+.faq__heading { margin: 0; font-size: inherit; font-weight: inherit; }
+
+.faq__trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-height: 60px;
+  padding: var(--space-4) var(--space-5);
+  background: transparent;
+  border: 0;
+  text-align: start;
+  cursor: pointer;
+  color: var(--fg-default);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+
+  &:hover { background: var(--bg-subtle); color: var(--fg-accent); }
+}
+
+.faq__q {
+  font-weight: var(--weight-bold);
+  font-size: var(--text-base);
+  line-height: var(--leading-snug);
+}
+
+.faq__chevron {
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 28px; height: 28px;
+  border-radius: var(--radius-full);
+  background: var(--bg-muted);
+  color: var(--fg-accent);
+  transition: transform var(--dur-base) var(--ease-out), background var(--dur-fast) var(--ease-out);
+
+  svg { width: 16px; height: 16px; }
+
+  .faq__item--open & { transform: rotate(180deg); background: var(--bg-accent); color: var(--fg-onaccent); }
+}
+
+/* grid-rows trick: animates to auto height without measuring content */
+.faq__panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--dur-base) var(--ease-out);
+
+  .faq__item--open & { grid-template-rows: 1fr; }
+}
+
+.faq__panel-inner {
+  overflow: hidden;
+  min-height: 0;
+
+  p {
+    padding: 0 var(--space-5) var(--space-5);
+    color: var(--fg-muted);
+    font-size: var(--text-sm);
+    line-height: var(--leading-loose);
+  }
+}

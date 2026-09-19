@@ -1,0 +1,49 @@
+:host { display: block; }
+
+.banner {
+  background: var(--bg-brand);
+  color: var(--fg-onbrand);
+}
+
+.banner__inner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding-block: var(--space-2);
+}
+
+.banner__tag {
+  flex-shrink: 0;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-full);
+  background: rgb(255 255 255 / 0.18);
+}
+
+.banner__text {
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+.banner__close {
+  margin-inline-start: auto;
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 32px; height: 32px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  opacity: 0.75;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+
+  svg { width: 16px; height: 16px; fill: none; }
+
+  &:hover { opacity: 1; background: rgb(255 255 255 / 0.14); }
+}

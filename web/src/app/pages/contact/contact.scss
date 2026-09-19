@@ -1,0 +1,156 @@
+:host { display: block; }
+
+.contact {
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr;
+  gap: clamp(2rem, 5vw, 4rem);
+  align-items: start;
+
+  @media (max-width: 900px) { grid-template-columns: 1fr; }
+}
+
+/* ------------------------------ aside ------------------------------ */
+.contact__title {
+  margin-top: var(--space-3);
+  font-size: clamp(1.875rem, 4vw, 2.5rem);
+  letter-spacing: -0.015em;
+}
+
+.contact__lede {
+  margin-top: var(--space-4);
+  color: var(--fg-muted);
+  line-height: var(--leading-loose);
+  max-width: 48ch;
+}
+
+.contact__list {
+  list-style: none;
+  margin-top: var(--space-10);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+
+  li { display: flex; gap: var(--space-4); align-items: flex-start; }
+
+  svg {
+    width: 20px; height: 20px;
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: var(--fg-accent);
+  }
+
+  a {
+    color: var(--fg-link);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+
+    &:hover { color: var(--fg-link-hover); border-bottom-color: currentColor; }
+  }
+}
+
+.contact__label {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  margin-bottom: 2px;
+}
+
+/* ------------------------------- card ------------------------------- */
+.contact__card {
+  padding: clamp(1.5rem, 4vw, 2.5rem);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--bg-canvas);
+  box-shadow: var(--shadow-md);
+}
+
+/* ------------------------------ notices ------------------------------ */
+.notice {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-6);
+  border: 1px solid;
+
+  svg { width: 20px; height: 20px; flex-shrink: 0; margin-top: 2px; }
+
+  &__title { font-weight: var(--weight-bold); font-size: var(--text-sm); }
+  &__copy  { margin-top: 2px; font-size: var(--text-sm); line-height: var(--leading-snug); }
+
+  &--success {
+    background: var(--status-success-bg);
+    color: var(--status-success-fg);
+    border-color: var(--status-success-br);
+  }
+
+  &--error {
+    background: var(--status-danger-bg);
+    color: var(--status-danger-fg);
+    border-color: var(--status-danger-br);
+  }
+}
+
+/* ------------------------------- fields ------------------------------- */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+
+  label { font-size: var(--text-sm); font-weight: var(--weight-bold); }
+
+  input, textarea {
+    width: 100%;
+    min-height: 46px;
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-canvas);
+    color: var(--fg-default);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    font-size: var(--text-base);
+    transition:
+      border-color var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out),
+      background var(--dur-fast) var(--ease-out);
+
+    &::placeholder { color: var(--fg-subtle); }
+
+    &:hover { border-color: var(--border-strong); }
+
+    &:focus {
+      outline: none;
+      border-color: var(--border-accent);
+      box-shadow: 0 0 0 3px var(--focus-halo);
+    }
+
+    &[aria-invalid='true'] {
+      border-color: var(--status-danger-br);
+      background: var(--status-danger-bg);
+
+      &:focus { box-shadow: 0 0 0 3px rgb(179 38 30 / 0.22); }
+    }
+  }
+
+  textarea { resize: vertical; line-height: var(--leading-normal); }
+
+  &__err {
+    font-size: var(--text-xs);
+    color: var(--status-danger-fg);
+    font-weight: var(--weight-bold);
+  }
+}
+
+.req { color: var(--status-danger-fg); }
+.opt { font-weight: var(--weight-regular); color: var(--fg-subtle); font-size: var(--text-xs); }
+
+.contact__submit { width: 100%; margin-top: var(--space-2); }
+
+.contact__fineprint {
+  margin-top: var(--space-4);
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  text-align: center;
+  line-height: var(--leading-snug);
+}

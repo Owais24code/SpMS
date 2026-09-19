@@ -1,0 +1,117 @@
+/* =========================================================================
+   AARFID SpMS — Semantic theme layer
+   Components consume ONLY these tokens, never the ramps directly.
+   Light is the default; dark activates via [data-theme="dark"] or the
+   OS preference when no explicit choice has been stored.
+   ========================================================================= */
+
+@mixin light-theme {
+  color-scheme: light;
+
+  --bg-canvas:    var(--neutral-0);
+  --bg-subtle:    var(--neutral-50);
+  --bg-muted:     var(--neutral-100);
+  --bg-inset:     var(--neutral-200);
+  --bg-inverse:   var(--navy-700);
+  --bg-brand:     var(--navy-700);
+  --bg-accent:    var(--blue-500);
+
+  --fg-default:   var(--neutral-900);   /* 15.8:1 on canvas */
+  --fg-muted:     var(--neutral-600);   /*  7.1:1 on canvas */
+  --fg-subtle:    var(--neutral-500);   /*  4.9:1 on canvas */
+  --fg-onbrand:   var(--neutral-0);     /* 13.5:1 on navy-700 */
+  --fg-onaccent:  var(--neutral-0);     /*  5.8:1 on blue-500 */
+  --fg-accent:    var(--blue-600);      /*  6.9:1 on canvas */
+  --fg-link:      var(--blue-600);
+  --fg-link-hover:var(--blue-700);
+
+  --border-subtle:  var(--neutral-200);
+  --border-default: var(--neutral-400); /* 3.40:1 — clears AA non-text floor */
+  --border-strong:  var(--neutral-600);
+  --border-accent:  var(--blue-500);
+
+  --focus-ring:   var(--blue-600);
+  --focus-halo:   rgb(0 85 150 / 0.22);
+
+  --status-success-fg: var(--success-600);
+  --status-success-bg: var(--success-50);
+  --status-success-br: var(--success-500);
+  --status-warning-fg: var(--warning-600);
+  --status-warning-bg: var(--warning-50);
+  --status-warning-br: var(--warning-500);
+  --status-danger-fg:  var(--danger-600);
+  --status-danger-bg:  var(--danger-50);
+  --status-danger-br:  var(--danger-500);
+  --status-info-fg:    var(--info-600);
+  --status-info-bg:    var(--info-50);
+  --status-info-br:    var(--info-500);
+
+  /* Glass — MARKETING SURFACE ONLY.
+     Opacity floor is set so text on glass still clears 4.5:1 over any
+     hero imagery. Do not lower these values. */
+  --glass-bg:     rgb(255 255 255 / 0.82);
+  --glass-bg-alt: rgb(0 48 87 / 0.72);
+  --glass-border: rgb(255 255 255 / 0.55);
+  --glass-blur:   16px;
+  --glass-shadow: 0 8px 32px rgb(0 24 44 / 0.12);
+
+  --scrim: rgb(0 13 24 / 0.52);
+}
+
+@mixin dark-theme {
+  color-scheme: dark;
+
+  --bg-canvas:    var(--navy-950);
+  --bg-subtle:    var(--navy-900);
+  --bg-muted:     var(--navy-800);
+  --bg-inset:     #062036;
+  --bg-inverse:   var(--neutral-0);
+  --bg-brand:     var(--navy-800);
+  --bg-accent:    var(--blue-400);
+
+  --fg-default:   #e9eef4;              /* 15.1:1 on canvas */
+  --fg-muted:     #a8b6c6;              /*  8.0:1 on canvas */
+  --fg-subtle:    #8494a6;              /*  5.3:1 on canvas */
+  --fg-onbrand:   #e9eef4;
+  --fg-onaccent:  var(--navy-950);      /*  7.4:1 on blue-400 */
+  --fg-accent:    var(--blue-300);      /*  7.6:1 on canvas */
+  --fg-link:      var(--blue-300);
+  --fg-link-hover:var(--blue-200);
+
+  --border-subtle:  #16324d;
+  --border-default: #4f7193;            /* 3.84 canvas / 3.53 subtle / 3.13 muted */
+  --border-strong:  #7d9ec0;
+  --border-accent:  var(--blue-400);
+
+  --focus-ring:   var(--blue-300);
+  --focus-halo:   rgb(95 169 229 / 0.30);
+
+  --status-success-fg: #6fd39b;
+  --status-success-bg: #0b2b1c;
+  --status-success-br: #2f9e68;
+  --status-warning-fg: #efba63;
+  --status-warning-bg: #33230a;
+  --status-warning-br: #b98524;
+  --status-danger-fg:  #f59b94;
+  --status-danger-bg:  #3a1512;
+  --status-danger-br:  #cf5b52;
+  --status-info-fg:    #7fc0f0;
+  --status-info-bg:    #0a2942;
+  --status-info-br:    #2b88d2;
+
+  --glass-bg:     rgb(0 24 44 / 0.78);
+  --glass-bg-alt: rgb(0 13 24 / 0.82);
+  --glass-border: rgb(126 167 205 / 0.28);
+  --glass-blur:   16px;
+  --glass-shadow: 0 8px 32px rgb(0 0 0 / 0.45);
+
+  --scrim: rgb(0 8 16 / 0.68);
+}
+
+:root                      { @include light-theme; }
+:root[data-theme='light']  { @include light-theme; }
+:root[data-theme='dark']   { @include dark-theme; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) { @include dark-theme; }
+}

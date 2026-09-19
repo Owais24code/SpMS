@@ -1,0 +1,102 @@
+:host { display: block; }
+
+.nf {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  min-height: calc(100vh - var(--header-h) - 200px);
+  display: grid;
+  place-items: center;
+  padding-block: clamp(3rem, 9vw, 6rem);
+  text-align: center;
+}
+
+.nf__bg { position: absolute; inset: 0; z-index: -1; }
+
+.nf__orb {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 520px; height: 520px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--blue-400), transparent 66%);
+  filter: blur(90px);
+  opacity: 0.3;
+}
+
+.nf__inner { max-width: 60ch; }
+
+.nf__code {
+  font-size: clamp(5rem, 20vw, 10rem);
+  font-weight: var(--weight-bold);
+  line-height: 0.9;
+  letter-spacing: -0.04em;
+  background: linear-gradient(170deg, var(--blue-400), var(--navy-600));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  user-select: none;
+
+  @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+    color: var(--fg-accent);
+  }
+}
+
+.nf__title {
+  margin-top: var(--space-5);
+  font-size: clamp(1.5rem, 4vw, 2.25rem);
+  letter-spacing: -0.015em;
+}
+
+.nf__copy {
+  margin-top: var(--space-4);
+  color: var(--fg-muted);
+  line-height: var(--leading-loose);
+}
+
+.nf__actions {
+  margin-top: var(--space-8);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: center;
+}
+
+.nf__links {
+  margin-top: var(--space-12);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--border-subtle);
+
+  &-title { font-size: var(--text-xs); color: var(--fg-subtle); margin-bottom: var(--space-3); }
+
+  ul {
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    justify-content: center;
+  }
+
+  a {
+    display: inline-block;
+    padding: var(--space-2) var(--space-4);
+    min-height: 40px;
+    line-height: 24px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-full);
+    color: var(--fg-muted);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
+    text-decoration: none;
+    transition:
+      color var(--dur-fast) var(--ease-out),
+      border-color var(--dur-fast) var(--ease-out),
+      background var(--dur-fast) var(--ease-out);
+
+    &:hover {
+      color: var(--fg-accent);
+      border-color: var(--border-accent);
+      background: var(--bg-subtle);
+    }
+  }
+}
