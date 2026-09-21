@@ -16,13 +16,18 @@
     // build output to be where this says it is.
     "directory": "./dist/web/browser",
 
-    // The SPA fallback. An unmatched path is served /index.html with a 200
-    // rather than a 404 — the same problem Blob static hosting has, and the
-    // reason Front Door needs a rewrite rule there.
+    // The SPA fallback, and the ONLY mechanism for it here. An unmatched path
+    // is served /index.html with a 200 rather than a 404 — the same problem
+    // Blob static hosting has, and the reason Front Door needs a rewrite rule
+    // there.
     //
-    // public/_redirects says the same thing for Pages, which reads that file
-    // and ignores this one. The two agree; neither is a fallback for the other
-    // being wrong.
+    // A public/_redirects carrying `/* /index.html 200` used to sit alongside
+    // this. That is the canonical SPA rule on Pages, but Workers REFUSES it:
+    // its asset serving already strips `.html` and `/index`, so the rewrite
+    // would re-enter its own rule, and the deploy fails validation with
+    // "Infinite loop detected in this rule" (code 100324). The file was
+    // removed rather than narrowed — this setting already does the job, and a
+    // second mechanism for one behaviour is what produced the failure.
     "not_found_handling": "single-page-application"
   }
 }

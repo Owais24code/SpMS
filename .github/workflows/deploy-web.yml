@@ -145,20 +145,6 @@ jobs:
             --overwrite \
             --content-cache 'public, max-age=31536000, immutable' \
             --exclude-pattern 'index.html'
-          # web.config and staticwebapp.config.json travel with public/ for
-          # other hosts (IIS, Static Web Apps) and do nothing here. They are
-          # removed rather than uploaded, so nobody reading $web later
-          # concludes routing is configured somewhere it is not.
-          az storage blob delete-batch \
-            --account-name '${{ steps.infra.outputs.storageAccountName }}' \
-            --auth-mode login \
-            --source '$web' \
-            --pattern 'web.config' || true
-          az storage blob delete-batch \
-            --account-name '${{ steps.infra.outputs.storageAccountName }}' \
-            --auth-mode login \
-            --source '$web' \
-            --pattern 'staticwebapp.config.json' || true
 
       # Pass two: the two files that decide which bundle and which API the
       # browser uses. A cached index.html keeps serving script tags for a
