@@ -1,8 +1,14 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <!-- Sdk.Web so the Api project's framework reference resolves. The Api
+         project is referenced deliberately: its guards, problem+json shaping,
+         ETag handling and paging were entirely uncovered, and the tenancy
+         convention lives in that layer. -->
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Spms.Domain\Spms.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Spms.Infrastructure\Spms.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Spms.Api\Spms.Api.csproj" />
   </ItemGroup>
 </Project>

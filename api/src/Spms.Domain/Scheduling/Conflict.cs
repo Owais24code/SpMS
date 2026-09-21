@@ -3,61 +3,96 @@ namespace Spms.Domain.Scheduling;
 public enum ConflictSeverity { Soft, Hard }
 
 /// <summary>
-/// A detected scheduling conflict.
-///
-/// CON-001 requires every conflict to carry severity, the rule, operational
-/// impact AND financial impact, and whether override is permitted — so those
-/// are required fields, not optional decoration.
+/// A detected conflict. CON-001 requires the popup to state severity, the rule,
+/// and both operational and financial impact — so the API returns all of it
+/// rather than leaving the client to invent copy.
 /// </summary>
 public sealed record Conflict(
     string Code,
+    /// <summary>
+    /// Which rule fired, independent of the wire code. Room turnover and
+    /// provider transition are BOTH CON-004 in the register, so deduplicating
+    /// by code alone silently discarded one of two different breaches — the
+    /// operator was told housekeeping was tight and never told the therapist
+    /// had no transition time, and the offered resolutions did not fix it.
+    /// </summary>
+    string Rule,
     ConflictSeverity Severity,
     string Summary,
     string OperationalImpact,
     string FinancialImpact,
     IReadOnlyList<string> Resolutions)
 {
-    /// <summary>
-    /// CON-003: a hard conflict is never overridable. Administrator status
-    /// alone does not bypass qualification, safety, privacy or capacity.
-    /// </summary>
     public bool Overridable => Severity == ConflictSeverity.Soft;
 }
 
+/// <summary>The CON-001..CON-007 register from SPECIFICATION_v2.12.md.</summary>
 public static class ConflictCatalog
 {
-    public static Conflict ProviderOverlap(string provider) => new(
-        "CON-001", ConflictSeverity.Soft,
-        $"{provider} is already booked in this window",
-        "Two appointments sit with one therapist; the later guest waits.",
+    public static Conflict ProviderOverlap(string providerId) => new(
+        "CON-001", "provider-overlap", ConflictSeverity.Soft,
+        $"Provider {providerId} is already booked in that window",
+        "Two appointments would sit with one therapist; the later guest waits.",
         "Likely service recovery on the affected booking.",
-        ["Choose another qualified provider", "Move to the next free slot", "Split across two therapists"]);
+        ["Choose another qualified provider", "Move to the next free slot", "Split across two providers"]);
 
-    public static Conflict ResourceOverlap(string room) => new(
-        "CON-002", ConflictSeverity.Hard,
-        $"{room} is occupied for this window",
-        "A room cannot hold two treatments. Physically impossible.",
-        "Both bookings are at risk if committed.",
-        ["Use a compatible free room", "Move to a later slot"]);
+    public static Conflict ResourceOverlap(string roomId) => new(
+        "CON-002", "room-overlap", ConflictSeverity.Hard,
+        $"Room {roomId} is occupied for that window",
+        "A room cannot hold two treatments. This is physically impossible.",
+        "Commit would be reversed; both bookings at risk.",
+        ["Choose a compatible free room", "Move the appointment"]);
 
-    public static Conflict ProviderUnqualified(string provider, string service) => new(
-        "CON-003", ConflictSeverity.Hard,
-        $"{provider} is not qualified for {service}",
-        "Delivering this service would be unlicensed.",
+    public static Conflict ProviderNotQualified(string providerId, string serviceName) => new(
+        "CON-003", "provider-not-qualified", ConflictSeverity.Hard,
+        $"Provider {providerId} is not qualified for {serviceName}",
+        "Delivering the service would be unlicensed.",
         "Regulatory exposure; insurance may not respond.",
         ["Choose a qualified provider", "Change to a service they are licensed for"]);
 
-    public static Conflict BufferCrossed() => new(
-        "CON-004", ConflictSeverity.Soft,
-        "Duration or turnover crosses blocked time",
-        "Turnover is compressed; the next guest may wait.",
-        "Minor — possible goodwill discount.",
-        ["Extend turnover", "Move to the next free slot"]);
+    public static Conflict RoomTurnoverCrossed(int minutes) => new(
+        "CON-004", "room-turnover", ConflictSeverity.Soft,
+        $"Less than {minutes} minutes of room turnover",
+        "Housekeeping cannot reset the room in time; the next guest may wait.",
+        "Minor — possible discount on the following booking.",
+        ["Extend turnover", "Move to the next free slot", "Use another room"]);
 
-    public static Conflict GuestOverlap(string guest) => new(
-        "CON-005", ConflictSeverity.Soft,
-        $"{guest} has an overlapping appointment",
+    public static Conflict ProviderTransitionCrossed(int minutes) => new(
+        "CON-004", "provider-transition", ConflictSeverity.Soft,
+        $"Less than {minutes} minutes between treatments for this provider",
+        "The therapist has no transition time; the day compounds late.",
+        "Minor — overtime risk at the end of shift.",
+        ["Move to the next free slot", "Assign another provider"]);
+
+    /// <summary>
+    /// Fails closed. An unknown provider is refused rather than assumed
+    /// qualified — a new hire or a typo would otherwise pass a licensing rule.
+    /// </summary>
+    public static Conflict ProviderUnknown(string providerId) => new(
+        "CON-003", "provider-unknown", ConflictSeverity.Hard,
+        $"Provider {providerId} has no qualification record",
+        "We cannot establish that this person is licensed for the service.",
+        "Regulatory exposure; insurance may not respond.",
+        ["Choose a provider with a current qualification", "Ask HR to record the credential"]);
+
+    public static Conflict GuestOverlap(string guestAlias) => new(
+        "CON-005", "guest-overlap", ConflictSeverity.Soft,
+        $"{guestAlias} has an overlapping appointment",
         "The guest cannot physically attend both.",
         "One booking becomes a no-show unless acknowledged.",
         ["Move the other booking", "Record an authorised acknowledgment"]);
+
+    public static Conflict StaleServiceVersion() => new(
+        "CON-006", "stale-service-version", ConflictSeverity.Soft,
+        "The service price or version has moved on",
+        "The quoted price no longer matches the catalogue.",
+        "Revenue variance on commit.",
+        ["Re-quote at the current price"]);
+
+    public static Conflict DependencyDown(string system) => new(
+        "CON-007", "dependency-down", ConflictSeverity.Hard,
+        $"{system} is unavailable",
+        "The owning system cannot confirm; state would diverge.",
+        "Unknown until the dependency responds.",
+        ["Retry once the dependency responds"]);
 }
