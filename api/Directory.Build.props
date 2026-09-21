@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <!-- net8.0: the LTS the build agents have. Retarget to net10.0 once the
+         pipeline runs it; nothing here depends on a newer BCL. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+</Project>
