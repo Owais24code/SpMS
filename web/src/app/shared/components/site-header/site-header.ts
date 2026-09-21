@@ -1,12 +1,13 @@
 import { Component, ChangeDetectionStrategy, signal, inject, HostListener } from '@angular/core';
 import { RouterLink, RouterLinkActive } from '@angular/router';
+import { FocusTrapDirective } from '../../directives/focus-trap.directive';
 import { ThemeService } from '../../../core/services/theme.service';
 import { SITE_NAV } from '../../../core/models/nav.model';
 
 @Component({
   selector: 'app-site-header',
   standalone: true,
-  imports: [RouterLink, RouterLinkActive],
+  imports: [RouterLink, RouterLinkActive, FocusTrapDirective],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './site-header.html',
   styleUrl: './site-header.scss',

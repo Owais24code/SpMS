@@ -1,0 +1,124 @@
+<app-page-header
+  eyebrow="Front desk"
+  title="Arrivals and check-in"
+  subtitle="Readiness shows completion status only. Intake answers are never served to this screen."
+>
+  <button type="button" class="btn btn--secondary" (click)="scan()">Scan credential</button>
+  <button type="button" class="btn btn--primary" (click)="walkIn()">Walk-in</button>
+</app-page-header>
+
+<div class="stack">
+  <div class="toolbar">
+    <input
+      class="input" type="search" placeholder="Guest alias or service"
+      aria-label="Search arrivals"
+      [value]="term()" (input)="term.set($any($event.target).value)"
+    />
+    <button type="button" class="chip" [attr.aria-pressed]="filter() === 'all'"     (click)="filter.set('all')">All</button>
+    <button type="button" class="chip" [attr.aria-pressed]="filter() === 'ready'"   (click)="filter.set('ready')">Ready</button>
+    <button type="button" class="chip" [attr.aria-pressed]="filter() === 'blocked'" (click)="filter.set('blocked')">Not ready</button>
+    <button type="button" class="chip" [attr.aria-pressed]="filter() === 'done'"    (click)="filter.set('done')">Checked in</button>
+
+    <span class="row row--end subtle numeric">
+      {{ store.pendingArrivals() }} still to arrive
+    </span>
+  </div>
+
+  @if (rows().length === 0) {
+    <app-state-panel
+      state="empty"
+      [title]="term() ? 'No arrival matches “' + term() + '”' : 'Nothing in this view'"
+      body="Clear the search or switch filter to see the rest of today."
+    />
+    <div class="row" style="justify-content:center">
+      <button type="button" class="btn btn--secondary" (click)="clearFilters()">Clear filters</button>
+    </div>
+  } @else {
+    <div class="panel">
+      <div class="panel__body panel__body--flush">
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th scope="col">Time</th>
+                <th scope="col">Guest</th>
+                <th scope="col">Service</th>
+                <th scope="col">Readiness</th>
+                <th scope="col">Locker</th>
+                <th scope="col"><span class="visually-hidden">Action</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (a of rows(); track a.id) {
+                <tr [class.is-done]="isDone(a)">
+                  <td class="numeric">{{ a.time }}</td>
+                  <td><span [appHighlight]="term()">{{ a.guestAlias }}</span></td>
+                  <td>{{ a.service }}</td>
+                  <td>
+                    @if (isDone(a)) {
+                      <span class="badge badge--ok">Checked in</span>
+                    } @else {
+                      <span class="row">
+                        <button type="button" class="badge"
+                                [class.badge--ok]="a.formsComplete" [class.badge--warn]="!a.formsComplete"
+                                [disabled]="a.formsComplete" (click)="fix(a, 'forms')">Forms</button>
+                        <button type="button" class="badge"
+                                [class.badge--ok]="a.depositSettled" [class.badge--warn]="!a.depositSettled"
+                                [disabled]="a.depositSettled" (click)="fix(a, 'deposit')">Deposit</button>
+                        <button type="button" class="badge"
+                                [class.badge--ok]="a.roomReady" [class.badge--neutral]="!a.roomReady"
+                                [disabled]="a.roomReady" (click)="fix(a, 'room')">Room</button>
+                      </span>
+                    }
+                  </td>
+                  <td>
+                    @if (a.locker) {
+                      <span class="numeric">{{ a.locker }}</span>
+                    } @else {
+                      <button type="button" class="btn btn--ghost" (click)="assignLocker(a)">Assign</button>
+                    }
+                  </td>
+                  <td>
+                    @if (isDone(a)) {
+                      <span class="subtle">Done</span>
+                    } @else {
+                      <button
+                        type="button" class="btn btn--ghost"
+                        [disabled]="!ready(a) || busy() === a.id"
+                        (click)="checkIn(a)"
+                      >{{ busy() === a.id ? 'Checking in…' : ready(a) ? 'Check in' : 'Blocked' }}</button>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  }
+
+  <div class="grid grid--halves">
+    <div class="panel">
+      <div class="panel__head"><span class="panel__title">Robe and slipper preferences</span></div>
+      <div class="panel__body">
+        <dl class="dl">
+          <dt>Robe size</dt><dd>Medium — in stock</dd>
+          <dt>Slipper size</dt><dd>41 — substitute offered</dd>
+          <dt>Consent to substitute</dt><dd><span class="badge badge--ok">Given</span></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel__head"><span class="panel__title">Late arrival</span></div>
+      <div class="panel__body">
+        <app-state-panel
+          state="conflict"
+          title="Guest 4824 is 18 minutes late"
+          body="The safe minimum for Hot stone 60 is 50 minutes. Offer the 45-minute variant rather than shortening the booked service."
+        />
+      </div>
+    </div>
+  </div>
+</div>

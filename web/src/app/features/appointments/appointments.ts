@@ -1,7 +1,9 @@
-import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
 import { PageHeader } from '../../shared/components/page-header/page-header';
 import { DurationPipe } from '../../shared/pipes/duration.pipe';
-import { APPOINTMENTS } from '../../core/data/workspace-data';
+import { WorkspaceStore } from '../../core/services/workspace-store';
+import { ToastService } from '../../core/services/toast.service';
+import { ConfirmService } from '../../core/services/confirm.service';
 
 @Component({
   selector: 'app-appointments',
@@ -14,8 +16,8 @@ import { APPOINTMENTS } from '../../core/data/workspace-data';
       title="Appointments"
       subtitle="Changing a booking may affect price, deposit and the intake you already completed. Those effects are shown before you confirm."
     >
-      <button type="button" class="btn btn--secondary">Download receipt</button>
-      <button type="button" class="btn btn--primary">Change booking</button>
+      <button type="button" class="btn btn--secondary" (click)="receipt()">Download receipt</button>
+      <button type="button" class="btn btn--primary" (click)="change()">Change booking</button>
     </app-page-header>
 
     <div class="grid grid--split">
@@ -23,8 +25,8 @@ import { APPOINTMENTS } from '../../core/data/workspace-data';
         <div class="panel__head">
           <span class="panel__title">All appointments</span>
           <div class="panel__actions">
-            <button type="button" class="chip" aria-pressed="true">Upcoming</button>
-            <button type="button" class="chip">Past</button>
+            <button type="button" class="chip" [attr.aria-pressed]="tab() === 'upcoming'" (click)="tab.set('upcoming')">Upcoming</button>
+            <button type="button" class="chip" [attr.aria-pressed]="tab() === 'past'" (click)="tab.set('past')">Past</button>
           </div>
         </div>
         <div class="panel__body panel__body--flush">
@@ -41,7 +43,7 @@ import { APPOINTMENTS } from '../../core/data/workspace-data';
                 </tr>
               </thead>
               <tbody>
-                @for (a of rows; track a.id) {
+                @for (a of rows(); track a.id) {
                   <tr>
                     <td class="numeric">{{ a.id }}</td>
                     <td class="numeric">{{ a.start }}</td>
@@ -74,7 +76,7 @@ import { APPOINTMENTS } from '../../core/data/workspace-data';
               <dt>After that</dt><dd class="numeric">50% of $240.00</dd>
               <dt>Deposit held</dt><dd class="numeric">$60.00</dd>
             </dl>
-            <button type="button" class="btn btn--secondary">Cancel appointment</button>
+            <button type="button" class="btn btn--secondary" (click)="cancel()">Cancel appointment</button>
             <p class="subtle">You will be asked to confirm, and we will email a receipt either way.</p>
           </div>
         </div>
@@ -103,5 +105,41 @@ import { APPOINTMENTS } from '../../core/data/workspace-data';
   `,
 })
 export class Appointments {
-  protected readonly rows = APPOINTMENTS;
+  private readonly toast = inject(ToastService);
+  private readonly confirm = inject(ConfirmService);
+  protected readonly store = inject(WorkspaceStore);
+
+  protected readonly tab = signal<'upcoming' | 'past'>('upcoming');
+
+  protected readonly rows = computed(() =>
+    this.tab() === 'past'
+      ? this.store.appointments().filter((a) => a.state === 'complete')
+      : this.store.appointments().filter((a) => a.state !== 'complete'));
+
+  protected async cancel(): Promise<void> {
+    const first = this.rows()[0];
+    if (!first) { this.toast.info('Nothing to cancel', 'There are no upcoming appointments.'); return; }
+
+    const ok = await this.confirm.ask({
+      title: `Cancel ${first.service}?`,
+      consequence: 'You are inside the free-cancellation window, so no fee applies and the $60.00 deposit is refunded. A receipt is emailed either way.',
+      confirmLabel: 'Cancel appointment',
+      tone: 'danger',
+    });
+    if (!ok) { this.toast.info('Kept', 'Your appointment is unchanged.'); return; }
+
+    this.store.cancelAppointment(first.id);
+    this.toast.success('Appointment cancelled', 'Deposit refunded. Receipt on its way.');
+  }
+
+  protected change(): void {
+    this.toast.warn(
+      'Changing this affects three things',
+      'Price moves to $265, the deposit is re-taken, and your hot stone waiver needs signing again.',
+    );
+  }
+
+  protected receipt(): void {
+    this.toast.success('Receipt sent', 'Emailed to the address on your booking.');
+  }
 }

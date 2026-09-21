@@ -1,8 +1,10 @@
-import { Component, ChangeDetectionStrategy, signal } from '@angular/core';
+import { Component, ChangeDetectionStrategy, signal, inject, computed, OnDestroy } from '@angular/core';
 import { PageHeader } from '../../shared/components/page-header/page-header';
 import { StatePanel } from '../../shared/components/state-panel/state-panel';
 import { DurationPipe } from '../../shared/pipes/duration.pipe';
-import { APPOINTMENTS } from '../../core/data/workspace-data';
+import { WorkspaceStore } from '../../core/services/workspace-store';
+import { ToastService } from '../../core/services/toast.service';
+import { ConfirmService } from '../../core/services/confirm.service';
 
 @Component({
   selector: 'app-treatments',
@@ -15,16 +17,27 @@ import { APPOINTMENTS } from '../../core/data/workspace-data';
       title="Treatment delivery"
       subtitle="Works offline. Start, pause and complete are idempotent, so a reconnect can never double-post."
     >
-      <button type="button" class="btn btn--secondary">Add product</button>
-      <button type="button" class="btn btn--primary">Rebook guest</button>
+      <button type="button" class="btn btn--secondary" (click)="addProduct()">Add product</button>
+      <button type="button" class="btn btn--primary" (click)="rebook()">Rebook guest</button>
     </app-page-header>
 
     <div class="stack">
-      <app-state-panel
-        state="offline"
-        title="No connection — 2 changes queued"
-        body="Your timer and notes are saved on this device. They will sync in order when the connection returns."
-      />
+      @if (!online()) {
+        <app-state-panel
+          state="offline"
+          [title]="'No connection — ' + queued() + ' change' + (queued() === 1 ? '' : 's') + ' queued'"
+          body="Your timer and notes are saved on this device. They will sync in order when the connection returns."
+        />
+        <div class="row" style="justify-content:center">
+          <button type="button" class="btn btn--secondary" (click)="reconnect()">Simulate reconnect</button>
+        </div>
+      } @else {
+        <app-state-panel
+          state="queued"
+          title="Synced"
+          body="Everything queued on this device has been applied in order."
+        />
+      }
 
       <div class="grid grid--split">
         <div class="panel">
@@ -32,30 +45,46 @@ import { APPOINTMENTS } from '../../core/data/workspace-data';
             <span class="panel__title">In progress</span>
             <span class="badge badge--info">Guest 4821</span>
             <div class="panel__actions">
-              <button type="button" class="btn btn--ghost" (click)="running.set(!running())">
+              <button type="button" class="btn btn--ghost" [disabled]="locked()" (click)="toggleTimer()">
                 {{ running() ? 'Pause' : 'Resume' }}
               </button>
-              <button type="button" class="btn btn--primary">Complete</button>
+              <button type="button" class="btn btn--primary" [disabled]="locked()" (click)="complete()">
+                {{ locked() ? 'Completed' : 'Complete' }}
+              </button>
             </div>
           </div>
 
           <div class="panel__body stack">
             <div class="timer">
-              <p class="timer__clock numeric">{{ running() ? '41:18' : '41:18' }}</p>
-              <p class="subtle">of {{ 90 | duration }} — Deep tissue</p>
-              <div class="meter"><span style="width: 46%"></span></div>
+              <p class="timer__clock numeric">{{ clock() }}</p>
+              <p class="subtle">of {{ 90 | duration }} — Deep tissue{{ running() ? '' : locked() ? ' — locked' : ' — paused' }}</p>
+              <div class="meter"><span [style.width.%]="progress()"></span></div>
             </div>
 
             <div class="restrict">
-              <span class="badge badge--warn">Acknowledge before starting</span>
+              @if (acknowledged()) {
+                <span class="badge badge--ok">Acknowledged</span>
+              } @else {
+                <button type="button" class="badge badge--warn" (click)="acknowledge()">
+                  Acknowledge before starting
+                </button>
+              }
               <p>Avoid deep pressure on the lower back. Shoulder work is fine.</p>
               <p class="subtle">Minimum-necessary summary. Full intake is not available on this device.</p>
             </div>
 
             <div>
               <label for="notes">Treatment notes</label>
-              <textarea id="notes" rows="4" placeholder="Autosaved and encrypted. Locks when you mark the service complete."></textarea>
-              <p class="subtle">Saved 8 seconds ago · queued</p>
+              <textarea
+                id="notes" rows="4"
+                [disabled]="locked()"
+                [value]="notes()"
+                (input)="notes.set($any($event.target).value)"
+                placeholder="Autosaved and encrypted. Locks when you mark the service complete."
+              ></textarea>
+              <p class="subtle">
+                {{ locked() ? 'Locked on completion — amendments only.' : 'Autosaved · ' + queued() + ' queued' }}
+              </p>
             </div>
           </div>
         </div>
@@ -64,7 +93,7 @@ import { APPOINTMENTS } from '../../core/data/workspace-data';
           <div class="panel__head"><span class="panel__title">Rest of today</span></div>
           <div class="panel__body panel__body--flush">
             <ul class="timeline" style="padding: var(--space-5)">
-              @for (a of upcoming; track a.id) {
+              @for (a of upcoming(); track a.id) {
                 <li [class.is-active]="a.state === 'in-progress'" [class.is-done]="a.state === 'complete'">
                   <p class="timeline__when numeric">{{ a.start }} · {{ a.durationMin | duration }}</p>
                   <p class="timeline__what">{{ a.service }}</p>
@@ -126,7 +155,81 @@ import { APPOINTMENTS } from '../../core/data/workspace-data';
     }
   `],
 })
-export class Treatments {
+export class Treatments implements OnDestroy {
+  private readonly toast = inject(ToastService);
+  private readonly confirm = inject(ConfirmService);
+  protected readonly store = inject(WorkspaceStore);
+
   protected readonly running = signal(true);
-  protected readonly upcoming = APPOINTMENTS.slice(0, 5);
+  protected readonly elapsed = signal(2478);          // seconds
+  protected readonly locked = signal(false);
+  protected readonly online = signal(false);
+  protected readonly queued = signal(2);
+  protected readonly notes = signal('');
+  protected readonly acknowledged = signal(false);
+
+  protected readonly upcoming = computed(() => this.store.appointments().slice(0, 5));
+
+  private readonly ticker = setInterval(() => {
+    if (this.running() && !this.locked()) this.elapsed.update((s) => s + 1);
+  }, 1000);
+
+  ngOnDestroy(): void { clearInterval(this.ticker); }
+
+  protected readonly clock = computed(() => {
+    const m = Math.floor(this.elapsed() / 60);
+    const s = this.elapsed() % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  });
+
+  protected readonly progress = computed(() =>
+    Math.min(100, Math.round((this.elapsed() / (90 * 60)) * 100)));
+
+  protected toggleTimer(): void {
+    if (this.locked()) return;
+    this.running.update((r) => !r);
+    this.queued.update((q) => q + 1);
+    this.toast.info(this.running() ? 'Timer resumed' : 'Timer paused',
+      'Queued on this device — it will sync in order, once.');
+  }
+
+  protected async complete(): Promise<void> {
+    if (!this.acknowledged()) {
+      this.toast.warn('Acknowledge the restriction first',
+        'The minimum-necessary summary must be acknowledged before a service can be completed.');
+      return;
+    }
+    const ok = await this.confirm.ask({
+      title: 'Complete this treatment?',
+      consequence: 'The notes lock when you complete. After that they can only be amended, never rewritten, and the amendment is attributed to you.',
+      confirmLabel: 'Complete and lock',
+    });
+    if (!ok) return;
+
+    this.running.set(false);
+    this.locked.set(true);
+    this.queued.update((q) => q + 1);
+    this.toast.success('Treatment complete', 'Notes locked. Queued for sync.');
+  }
+
+  protected acknowledge(): void {
+    this.acknowledged.set(true);
+    this.toast.success('Restriction acknowledged', 'Recorded against your name and this appointment.');
+  }
+
+  protected reconnect(): void {
+    this.online.set(true);
+    const n = this.queued();
+    this.queued.set(0);
+    this.toast.success('Back online', `${n} queued change${n === 1 ? '' : 's'} applied in order. Nothing duplicated.`);
+  }
+
+  protected addProduct(): void {
+    this.toast.success('Add-on recorded', 'Arnica balm 50ml — price revalidated against the live catalogue.');
+  }
+
+  protected rebook(): void {
+    const a = this.store.createAppointment();
+    this.toast.success('Rebooked', `${a.service} on the same day next week. Retry is safe — no duplicate created.`);
+  }
 }

@@ -1,7 +1,8 @@
-import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
 import { PageHeader } from '../../shared/components/page-header/page-header';
 import { StatePanel } from '../../shared/components/state-panel/state-panel';
-import { STAFF } from '../../core/data/workspace-data';
+import { WorkspaceStore } from '../../core/services/workspace-store';
+import { ToastService } from '../../core/services/toast.service';
 
 @Component({
   selector: 'app-staff',
@@ -14,8 +15,8 @@ import { STAFF } from '../../core/data/workspace-data';
       title="Staff and credentials"
       subtitle="As a manager you can see whether someone can be assigned, and when a credential expires — not why a block exists."
     >
-      <button type="button" class="btn btn--secondary">Upload credential</button>
-      <button type="button" class="btn btn--primary">Add team member</button>
+      <button type="button" class="btn btn--secondary" (click)="upload()">Upload credential</button>
+      <button type="button" class="btn btn--primary" (click)="add()">Add team member</button>
     </app-page-header>
 
     <div class="stack">
@@ -24,8 +25,8 @@ import { STAFF } from '../../core/data/workspace-data';
           <div class="panel__head">
             <span class="panel__title">Team</span>
             <div class="panel__actions">
-              <button type="button" class="chip" aria-pressed="true">Active</button>
-              <button type="button" class="chip">Expiring soon</button>
+              <button type="button" class="chip" [attr.aria-pressed]="filter() === 'active'" (click)="filter.set('active')">Everyone</button>
+              <button type="button" class="chip" [attr.aria-pressed]="filter() === 'blocked'" (click)="filter.set('blocked')">Blocked</button>
             </div>
           </div>
           <div class="panel__body panel__body--flush">
@@ -41,7 +42,7 @@ import { STAFF } from '../../core/data/workspace-data';
                   </tr>
                 </thead>
                 <tbody>
-                  @for (s of staff; track s.id) {
+                  @for (s of staff(); track s.id) {
                     <tr>
                       <td>{{ s.name }}</td>
                       <td>{{ s.role }}</td>
@@ -53,6 +54,7 @@ import { STAFF } from '../../core/data/workspace-data';
                         } @else {
                           <span class="badge badge--danger">Blocked</span>
                           <span class="subtle" style="margin-inline-start: var(--space-2)">{{ s.blockHint }}</span>
+                          <button type="button" class="btn btn--ghost" (click)="renew(s.id, s.name)">Renew</button>
                         }
                       </td>
                     </tr>
@@ -106,7 +108,7 @@ import { STAFF } from '../../core/data/workspace-data';
               <path d="M12 16V4M8 8l4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"
                     fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
-            <p><strong>Drop a file here</strong> or <button type="button" class="linklike">choose one</button></p>
+            <p><strong>Drop a file here</strong> or <button type="button" class="linklike" (click)="upload()">choose one</button></p>
             <p class="subtle">Uploads are quarantined until a malware scan clears them. Downloads are signed and expire.</p>
           </div>
         </div>
@@ -146,5 +148,26 @@ import { STAFF } from '../../core/data/workspace-data';
   `],
 })
 export class Staff {
-  protected readonly staff = STAFF;
+  private readonly toast = inject(ToastService);
+  protected readonly store = inject(WorkspaceStore);
+
+  protected readonly filter = signal<'active' | 'blocked'>('active');
+
+  protected readonly staff = computed(() =>
+    this.filter() === 'blocked'
+      ? this.store.staff().filter((s) => !s.assignable)
+      : this.store.staff());
+
+  protected renew(id: string, name: string): void {
+    this.store.renewCredential(id);
+    this.toast.success('Credential renewed', `${name} is assignable again from now.`);
+  }
+
+  protected upload(): void {
+    this.toast.info('Upload quarantined', 'The file is held until a malware scan clears it. Downloads are signed and expire.');
+  }
+
+  protected add(): void {
+    this.toast.info('Invite sent', 'They will appear here once HR completes the employment record.');
+  }
 }

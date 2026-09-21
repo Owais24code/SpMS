@@ -1,6 +1,8 @@
-import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, computed } from '@angular/core';
 import { PageHeader } from '../../shared/components/page-header/page-header';
-import { OWNERS } from '../../core/data/workspace-data';
+import { WorkspaceStore } from '../../core/services/workspace-store';
+import { ToastService } from '../../core/services/toast.service';
+import { ConfirmService } from '../../core/services/confirm.service';
 
 @Component({
   selector: 'app-integrations',
@@ -13,8 +15,10 @@ import { OWNERS } from '../../core/data/workspace-data';
       title="Integrations and ownership"
       subtitle="Exactly one system owns each capability at any moment. Changes take effect at a declared time and need a second approver."
     >
-      <button type="button" class="btn btn--secondary">Run preflight</button>
-      <button type="button" class="btn btn--primary">Propose change</button>
+      <button type="button" class="btn btn--secondary" [disabled]="preflight() === 'running'" (click)="runPreflight()">
+        {{ preflight() === 'running' ? 'Running…' : 'Run preflight' }}
+      </button>
+      <button type="button" class="btn btn--primary" (click)="propose()">Propose change</button>
     </app-page-header>
 
     <div class="stack">
@@ -33,7 +37,7 @@ import { OWNERS } from '../../core/data/workspace-data';
                 </tr>
               </thead>
               <tbody>
-                @for (o of owners; track o.capability) {
+                @for (o of owners(); track o.capability) {
                   <tr>
                     <td>{{ o.capability }}</td>
                     <td>{{ o.owner }}</td>
@@ -58,15 +62,28 @@ import { OWNERS } from '../../core/data/workspace-data';
         <div class="panel">
           <div class="panel__head">
             <span class="panel__title">Preflight — credential issue</span>
-            <span class="badge badge--warn">1 failure</span>
+            @switch (preflight()) {
+              @case ('running') { <span class="badge badge--info">Running</span> }
+              @case ('pass')    { <span class="badge badge--ok">All passed</span> }
+              @case ('fail')    { <span class="badge badge--warn">1 failure</span> }
+              @default          { <span class="badge badge--neutral">Not run</span> }
+            }
           </div>
           <div class="panel__body">
-            <ul class="checks">
-              <li class="ok"><span>Field mappings complete</span><span class="badge badge--ok">Pass</span></li>
-              <li class="ok"><span>Queues drained</span><span class="badge badge--ok">Pass</span></li>
-              <li class="ok"><span>Reconciliation window agreed</span><span class="badge badge--ok">Pass</span></li>
-              <li class="bad"><span>Outage readiness runbook</span><span class="badge badge--danger">Fail</span></li>
-            </ul>
+            @if (preflight() === 'idle') {
+              <p class="subtle">Preflight has not run for this change yet.</p>
+            } @else {
+              <ul class="checks">
+                @for (c of checks(); track c.label) {
+                  <li [class.ok]="c.ok" [class.bad]="!c.ok">
+                    <span>{{ c.label }}</span>
+                    <span class="badge" [class.badge--ok]="c.ok" [class.badge--danger]="!c.ok">
+                      {{ c.ok ? 'Pass' : 'Fail' }}
+                    </span>
+                  </li>
+                }
+              </ul>
+            }
             <p class="subtle" style="margin-top: var(--space-4)">
               Activation is blocked while any check fails. Fix the runbook and re-run.
             </p>
@@ -91,7 +108,8 @@ import { OWNERS } from '../../core/data/workspace-data';
                 <p class="timeline__note">Rollback stays available for 14 days after cutover.</p>
               </li>
             </ul>
-            <button type="button" class="btn btn--secondary" disabled>Approve</button>
+            <button type="button" class="btn btn--secondary" (click)="selfApprove()">Approve</button>
+            <p class="subtle">Try it — the refusal is the feature.</p>
           </div>
         </div>
       </div>
@@ -121,5 +139,49 @@ import { OWNERS } from '../../core/data/workspace-data';
   `],
 })
 export class Integrations {
-  protected readonly owners = OWNERS;
+  private readonly toast = inject(ToastService);
+  private readonly confirm = inject(ConfirmService);
+  protected readonly store = inject(WorkspaceStore);
+
+  protected readonly owners = computed(() => this.store.owners());
+  protected readonly preflight = computed(() => this.store.preflight());
+
+  protected readonly checks = computed(() => {
+    const failed = this.preflight() === 'fail';
+    return [
+      { label: 'Field mappings complete',    ok: true },
+      { label: 'Queues drained',             ok: true },
+      { label: 'Reconciliation window agreed', ok: true },
+      { label: 'Outage readiness runbook',   ok: !failed },
+    ];
+  });
+
+  protected async runPreflight(): Promise<void> {
+    const outcome = await this.store.runPreflight();
+    if (outcome === 'pass') {
+      this.toast.success('Preflight passed', 'Activation is unblocked, pending a second approver.');
+    } else {
+      this.toast.warn('Preflight failed', 'The outage readiness runbook is missing. Activation stays blocked.', 'SPMS-CFG-002');
+    }
+  }
+
+  protected async propose(): Promise<void> {
+    const ok = await this.confirm.ask({
+      title: 'Propose a new owner for Linen ledger?',
+      consequence: 'The change takes effect at the timestamp you set, not immediately. You will not be able to approve it yourself.',
+      confirmLabel: 'Propose change',
+    });
+    if (!ok) return;
+    this.store.proposeChange('Linen ledger');
+    this.toast.success('Change proposed', 'Waiting on a second approver — four-eyes is enforced.');
+  }
+
+  /** Always refused: the proposer cannot self-approve. */
+  protected selfApprove(): void {
+    this.toast.error(
+      'You proposed this change',
+      'A second approver must sign it off. This is enforced server-side, not just hidden here.',
+      'SPMS-CFG-003',
+    );
+  }
 }

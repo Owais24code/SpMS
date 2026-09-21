@@ -1,6 +1,7 @@
-import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
 import { PageHeader } from '../../shared/components/page-header/page-header';
-import { DEVICES } from '../../core/data/workspace-data';
+import { WorkspaceStore } from '../../core/services/workspace-store';
+import { ToastService } from '../../core/services/toast.service';
 
 @Component({
   selector: 'app-devices',
@@ -13,21 +14,21 @@ import { DEVICES } from '../../core/data/workspace-data';
       title="Devices and quiet notification"
       subtitle="Pagers carry an anonymous token, never a guest name, so a device left on a counter reveals nothing."
     >
-      <button type="button" class="btn btn--secondary">Mark returned</button>
-      <button type="button" class="btn btn--primary">Assign device</button>
+      <button type="button" class="btn btn--secondary" (click)="returnAll()">Return all</button>
+      <button type="button" class="btn btn--primary" (click)="assignNext()">Assign device</button>
     </app-page-header>
 
     <div class="stack">
       <div class="toolbar">
-        <button type="button" class="chip" aria-pressed="true">All</button>
-        <button type="button" class="chip">Pagers</button>
-        <button type="button" class="chip">Lockers</button>
-        <button type="button" class="chip">Low battery</button>
-        <span class="row row--end subtle">1 device out of service</span>
+        <button type="button" class="chip" [attr.aria-pressed]="filter() === 'all'" (click)="filter.set('all')">All</button>
+        <button type="button" class="chip" [attr.aria-pressed]="filter() === 'Pager'" (click)="filter.set('Pager')">Pagers</button>
+        <button type="button" class="chip" [attr.aria-pressed]="filter() === 'Locker'" (click)="filter.set('Locker')">Lockers</button>
+        <button type="button" class="chip" [attr.aria-pressed]="filter() === 'low'" (click)="filter.set('low')">Low battery</button>
+        <span class="row row--end subtle numeric">{{ outOfService() }} out of service</span>
       </div>
 
       <div class="grid grid--cards">
-        @for (d of devices; track d.id) {
+        @for (d of devices(); track d.id) {
           <article class="dev" [class.is-down]="!d.online">
             <header class="dev__head">
               <span class="dev__id numeric">{{ d.id }}</span>
@@ -49,9 +50,7 @@ import { DEVICES } from '../../core/data/workspace-data';
 
             <footer class="dev__foot">
               <span class="subtle">{{ d.assignedToken ? 'Token ' + d.assignedToken : 'Unassigned' }}</span>
-              <span class="badge" [class.badge--ok]="d.online" [class.badge--danger]="!d.online">
-                {{ d.online ? 'Online' : 'Offline' }}
-              </span>
+              <button type="button" class="btn btn--ghost" (click)="act(d.id, d.state)">{{ label(d.state) }}</button>
             </footer>
           </article>
         }
@@ -74,9 +73,10 @@ import { DEVICES } from '../../core/data/workspace-data';
               <select id="fallback"><option>Notify front desk discreetly</option><option>Notify duty manager</option></select>
             </div>
           </div>
-          <p class="subtle" style="margin-top: var(--space-4)">
-            Guest preference overrides the default pattern. Audible alerts are never used in treatment areas.
-          </p>
+          <div class="row" style="margin-top: var(--space-4)">
+            <button type="button" class="btn btn--primary" (click)="saveAlerts()">Save alert policy</button>
+            <span class="subtle">Guest preference overrides the default. Audible alerts are never used in treatment areas.</span>
+          </div>
         </div>
       </div>
     </div>
@@ -108,5 +108,44 @@ import { DEVICES } from '../../core/data/workspace-data';
   `],
 })
 export class Devices {
-  protected readonly devices = DEVICES;
+  private readonly toast = inject(ToastService);
+  protected readonly store = inject(WorkspaceStore);
+
+  protected readonly filter = signal<'all' | 'Pager' | 'Locker' | 'low'>('all');
+
+  protected readonly devices = computed(() => {
+    const f = this.filter();
+    return this.store.devices().filter((d) =>
+      f === 'all' ? true : f === 'low' ? d.battery < 50 : d.kind === f);
+  });
+
+  protected readonly outOfService = computed(() =>
+    this.store.devices().filter((d) => d.state === 'out-of-service').length);
+
+  protected act(id: string, state: string): void {
+    if (state === 'available') { this.store.assignDevice(id); this.toast.success('Device assigned', `${id} paired to an anonymous token. No guest name is written to it.`); }
+    else if (state === 'assigned') { this.store.returnDevice(id); this.toast.success('Device returned', `${id} moved to cleaning.`); }
+    else { this.store.restoreDevice(id); this.toast.success('Back in service', id); }
+  }
+
+  protected label(state: string): string {
+    return state === 'available' ? 'Assign' : state === 'assigned' ? 'Return' : 'Mark available';
+  }
+
+  protected assignNext(): void {
+    const free = this.store.devices().find((d) => d.state === 'available');
+    if (!free) { this.toast.warn('Nothing free', 'Every device is assigned, cleaning or out of service.'); return; }
+    this.act(free.id, 'available');
+  }
+
+  protected returnAll(): void {
+    const assigned = this.store.devices().filter((d) => d.state === 'assigned');
+    if (!assigned.length) { this.toast.info('Nothing to return', 'No device is currently assigned.'); return; }
+    assigned.forEach((d) => this.store.returnDevice(d.id));
+    this.toast.success(`${assigned.length} devices returned`, 'All moved to cleaning.');
+  }
+
+  protected saveAlerts(): void {
+    this.toast.success('Alert policy saved', 'Applies to new assignments. Guest preference still overrides the default pattern.');
+  }
 }

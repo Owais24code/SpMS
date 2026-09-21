@@ -1,6 +1,7 @@
-import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
 import { PageHeader } from '../../shared/components/page-header/page-header';
-import { MESSAGE_RULES } from '../../core/data/workspace-data';
+import { WorkspaceStore } from '../../core/services/workspace-store';
+import { ToastService } from '../../core/services/toast.service';
 
 @Component({
   selector: 'app-messaging',
@@ -13,8 +14,8 @@ import { MESSAGE_RULES } from '../../core/data/workspace-data';
       title="Messaging rules"
       subtitle="Consent and quiet hours are checked again at send time, not just when the rule is saved."
     >
-      <button type="button" class="btn btn--secondary">Send test</button>
-      <button type="button" class="btn btn--primary">New rule</button>
+      <button type="button" class="btn btn--secondary" (click)="sendTest()">Send test</button>
+      <button type="button" class="btn btn--primary" (click)="newRule()">New rule</button>
     </app-page-header>
 
     <div class="grid grid--split">
@@ -34,7 +35,7 @@ import { MESSAGE_RULES } from '../../core/data/workspace-data';
                 </tr>
               </thead>
               <tbody>
-                @for (r of rules; track r.id) {
+                @for (r of store.rules(); track r.id) {
                   <tr>
                     <td>{{ r.name }}</td>
                     <td>{{ r.trigger }}</td>
@@ -42,9 +43,12 @@ import { MESSAGE_RULES } from '../../core/data/workspace-data';
                     <td>{{ r.channel }}</td>
                     <td class="numeric">{{ r.lastSent }}</td>
                     <td>
-                      <span class="badge" [class.badge--ok]="r.active" [class.badge--neutral]="!r.active">
+                      <button type="button" class="badge"
+                              [class.badge--ok]="r.active" [class.badge--neutral]="!r.active"
+                              (click)="toggle(r.id, r.name)"
+                              [attr.aria-label]="(r.active ? 'Pause' : 'Enable') + ' ' + r.name">
                         {{ r.active ? 'On' : 'Paused' }}
-                      </span>
+                      </button>
                     </td>
                   </tr>
                 }
@@ -120,5 +124,21 @@ import { MESSAGE_RULES } from '../../core/data/workspace-data';
   `],
 })
 export class Messaging {
-  protected readonly rules = MESSAGE_RULES;
+  private readonly toast = inject(ToastService);
+  protected readonly store = inject(WorkspaceStore);
+
+  protected toggle(id: string, name: string): void {
+    const on = this.store.toggleRule(id);
+    this.toast.success(on ? 'Rule enabled' : 'Rule paused', `${name} — consent and quiet hours are still checked at send time.`);
+  }
+
+  protected sendTest(): void {
+    this.toast.success('Test sent to a synthetic recipient',
+      'No production guest was contacted. Real sends always re-check consent.');
+  }
+
+  protected newRule(): void {
+    const r = this.store.addRule();
+    this.toast.info('Rule created — paused', `${r.name} will not send until you enable it.`);
+  }
 }

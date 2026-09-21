@@ -279,3 +279,11 @@
 .muted { color: var(--fg-muted); }
 .subtle { color: var(--fg-subtle); font-size: var(--text-sm); }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Density — set by Settings, applied on the document element. */
+:root[data-density='compact'] {
+  .panel__body { padding: var(--space-3) var(--space-4); }
+  .table th, .table td { padding: var(--space-2) var(--space-3); }
+  .stack { gap: var(--space-3); }
+  .grid { gap: var(--space-3); }
+}

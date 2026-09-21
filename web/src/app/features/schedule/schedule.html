@@ -3,8 +3,9 @@
   title="Schedule"
   subtitle="Drag to move an appointment, or use Move on a focused card — both paths run the same preflight before anything commits."
 >
-  <button type="button" class="btn btn--secondary">Print run sheet</button>
-  <button type="button" class="btn btn--primary">New appointment</button>
+  <button type="button" class="btn btn--ghost" (click)="clearDay()">Clear day</button>
+  <button type="button" class="btn btn--secondary" (click)="printRunSheet()">Print run sheet</button>
+  <button type="button" class="btn btn--primary" (click)="newAppointment()">New appointment</button>
 </app-page-header>
 
 <div class="stack">
@@ -14,15 +15,53 @@
       <button type="button" [attr.aria-pressed]="view() === 'week'" (click)="view.set('week')">Week</button>
     </div>
 
-    <button type="button" class="chip">Fri 19 Sep</button>
-    <button type="button" class="chip" aria-pressed="true">All providers</button>
-    <button type="button" class="chip">All rooms</button>
+    <span class="stepper">
+      <button type="button" (click)="step(-1)" aria-label="Previous day">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+      <span class="numeric">{{ dateLabel() }}</span>
+      <button type="button" (click)="step(1)" aria-label="Next day">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+    </span>
+
+    <button type="button" class="chip" [attr.aria-pressed]="laneFilter() === 'all'" (click)="setFilter('all')">Everything</button>
+    <button type="button" class="chip" [attr.aria-pressed]="laneFilter() === 'providers'" (click)="setFilter('providers')">Providers</button>
+    <button type="button" class="chip" [attr.aria-pressed]="laneFilter() === 'rooms'" (click)="setFilter('rooms')">Rooms</button>
 
     <span class="row--end row">
-      <span class="badge badge--info">3 conflicts</span>
-      <span class="subtle">Refreshed 12s ago</span>
+      @if (store.openConflicts(); as n) {
+        <button type="button" class="badge badge--warn badge--btn" (click)="openSoft()">
+          {{ n }} conflict{{ n === 1 ? '' : 's' }} — review
+        </button>
+      } @else {
+        <span class="badge badge--ok">No conflicts</span>
+      }
+      <span class="subtle numeric">{{ lanes().length }} lanes</span>
     </span>
   </div>
+
+  @if (view() === 'week') {
+    <div class="week">
+      @for (d of weekDays; track d) {
+        <div class="week__col">
+          <p class="week__day">{{ d }}</p>
+          @for (lane of lanes(); track lane.name) {
+            <div class="week__cell">
+              <span class="week__name">{{ lane.name }}</span>
+              <span class="week__count numeric">{{ lane.slots.length }}</span>
+            </div>
+          }
+        </div>
+      }
+    </div>
+  } @else {
 
   <div class="board">
     <div class="board__hours" aria-hidden="true">
@@ -32,7 +71,7 @@
       </div>
     </div>
 
-    @for (lane of lanes; track lane.name) {
+    @for (lane of lanes(); track lane.name) {
       <div class="lane">
         <div class="lane__head">
           <span class="lane__name">{{ lane.name }}</span>
@@ -49,7 +88,7 @@
               [class]="'slot--' + slot.state"
               [style.--start.%]="slot.startPct"
               [style.--len.%]="slot.widthPct"
-              (click)="slot.state === 'conflict' ? open(hard) : null"
+              (click)="onSlot(slot.state)"
             >
               <span class="slot__label">{{ slot.label }}</span>
             </button>
@@ -58,6 +97,8 @@
       </div>
     }
   </div>
+
+  }
 
   <p class="legend">
     <span class="legend__key slot--booked"></span> Booked
@@ -73,7 +114,13 @@
 @if (drawer(); as c) {
   <div class="drawer-scrim" (click)="close()" aria-hidden="true"></div>
 
-  <aside class="cdrawer" role="dialog" aria-labelledby="cdrawer-title" aria-modal="true">
+  <aside
+    class="cdrawer"
+    role="dialog"
+    aria-labelledby="cdrawer-title"
+    aria-modal="true"
+    [appFocusTrap]="true"
+  >
     <header class="cdrawer__head">
       <span class="badge" [class.badge--warn]="c.severity === 'soft'" [class.badge--danger]="c.severity === 'hard'">
         {{ c.severity === 'soft' ? 'Soft conflict' : 'Hard conflict' }}
@@ -100,7 +147,7 @@
         <p class="subtle">Alternatives</p>
         <ul class="cdrawer__alts">
           @for (a of c.alternatives; track a) {
-            <li><button type="button">{{ a }}</button></li>
+            <li><button type="button" (click)="applyAlternative(a)">{{ a }}</button></li>
           }
         </ul>
       </div>
@@ -134,8 +181,10 @@
         class="btn btn--primary"
         [disabled]="!canCommit()"
         [attr.aria-disabled]="!canCommit()"
+        (click)="commit()"
       >
-        {{ c.severity === 'hard' ? 'Cannot commit' : 'Override and commit' }}
+        {{ c.severity === 'hard' ? 'Cannot commit'
+           : committing() ? 'Committing…' : 'Override and commit' }}
       </button>
     </footer>
   </aside>

@@ -1,7 +1,8 @@
-import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
 import { PageHeader } from '../../shared/components/page-header/page-header';
 import { StatCard } from '../../shared/components/stat-card/stat-card';
-import { STOCK } from '../../core/data/workspace-data';
+import { WorkspaceStore } from '../../core/services/workspace-store';
+import { ToastService } from '../../core/services/toast.service';
 
 @Component({
   selector: 'app-inventory',
@@ -14,22 +15,29 @@ import { STOCK } from '../../core/data/workspace-data';
       title="Inventory and readiness"
       subtitle="Forecast demand shows the assumptions behind it, so you can judge whether to trust the number."
     >
-      <button type="button" class="btn btn--secondary">Adjust stock</button>
-      <button type="button" class="btn btn--primary">Request wash</button>
+      <button type="button" class="btn btn--secondary" (click)="adjust('Robe — Small', 24)">Adjust stock</button>
+      <button type="button" class="btn btn--primary" [disabled]="washing()" (click)="approveWash()">
+        {{ washing() ? 'Requesting…' : 'Request wash' }}
+      </button>
     </app-page-header>
 
     <div class="stack">
       <div class="grid grid--kpi">
         <app-stat-card label="Rooms ready" value="9 / 12" delta="3 in turnover" hint="two blocked for maintenance" />
-        <app-stat-card label="Clean linen" value="626" delta="-12%" trend="down" tone="negative" hint="against today's forecast" />
-        <app-stat-card label="In wash" value="285" hint="next cycle back 4:40pm" />
-        <app-stat-card label="Shortfall risk" value="1 line" delta="Hand towels" trend="up" tone="negative" hint="low confidence forecast" />
+        <app-stat-card label="Clean linen" [value]="cleanTotal().toString()" delta="-12%" trend="down" tone="negative" hint="against today's forecast" />
+        <app-stat-card label="In wash" [value]="washTotal().toString()" hint="next cycle back 4:40pm" />
+        <app-stat-card label="Shortfall risk" [value]="riskLines() + ' line' + (riskLines() === 1 ? '' : 's')"
+                       [tone]="riskLines() ? 'negative' : 'positive'" hint="cover below forecast need" />
       </div>
 
       <div class="panel">
         <div class="panel__head">
           <span class="panel__title">Stock and forecast</span>
-          <span class="panel__hint">Horizon: next 24 hours · refreshed 08:40</span>
+          <span class="panel__hint">Horizon: next 24 hours</span>
+          <div class="panel__actions">
+            <button type="button" class="chip" [attr.aria-pressed]="!onlyRisk()" (click)="onlyRisk.set(false)">All lines</button>
+            <button type="button" class="chip" [attr.aria-pressed]="onlyRisk()" (click)="onlyRisk.set(true)">At risk</button>
+          </div>
         </div>
         <div class="panel__body panel__body--flush">
           <div class="table-wrap">
@@ -44,10 +52,11 @@ import { STOCK } from '../../core/data/workspace-data';
                   <th scope="col">Forecast need</th>
                   <th scope="col">Cover</th>
                   <th scope="col">Confidence</th>
+                  <th scope="col"><span class="visually-hidden">Adjust</span></th>
                 </tr>
               </thead>
               <tbody>
-                @for (s of stock; track s.item) {
+                @for (s of stock(); track s.item) {
                   <tr>
                     <td>{{ s.item }}</td>
                     <td class="numeric">{{ s.clean }}</td>
@@ -71,6 +80,9 @@ import { STOCK } from '../../core/data/workspace-data';
                         {{ s.confidence }}
                       </span>
                     </td>
+                    <td>
+                      <button type="button" class="btn btn--ghost" (click)="adjust(s.item, 12)">+12</button>
+                    </td>
                   </tr>
                 }
               </tbody>
@@ -89,8 +101,10 @@ import { STOCK } from '../../core/data/workspace-data';
               cycle time. Confidence is low because Saturday consumption has varied ±18% recently.
             </p>
             <div class="row">
-              <button type="button" class="btn btn--primary">Approve wash</button>
-              <button type="button" class="btn btn--ghost">Transfer from Lakeside</button>
+              <button type="button" class="btn btn--primary" [disabled]="washing()" (click)="approveWash()">
+                {{ washing() ? 'Approving…' : 'Approve wash' }}
+              </button>
+              <button type="button" class="btn btn--ghost" (click)="transfer()">Transfer from Lakeside</button>
             </div>
             <p class="subtle">A person approves every action. Nothing is ordered automatically.</p>
           </div>
@@ -141,7 +155,41 @@ import { STOCK } from '../../core/data/workspace-data';
   `],
 })
 export class Inventory {
-  protected readonly stock = STOCK;
+  private readonly toast = inject(ToastService);
+  protected readonly store = inject(WorkspaceStore);
+
+  protected readonly washing = signal(false);
+  protected readonly onlyRisk = signal(false);
+
+  protected readonly stock = computed(() =>
+    this.onlyRisk()
+      ? this.store.stock().filter((s) => this.cover(s) < 100)
+      : this.store.stock());
+
+  protected readonly cleanTotal = computed(() =>
+    this.store.stock().reduce((n, s) => n + s.clean, 0));
+  protected readonly washTotal = computed(() =>
+    this.store.stock().reduce((n, s) => n + s.inWash, 0));
+  protected readonly riskLines = computed(() =>
+    this.store.stock().filter((s) => this.cover(s) < 100).length);
+
+  protected async approveWash(): Promise<void> {
+    this.washing.set(true);
+    await this.store.approveWash('Towel — Hand');
+    this.washing.set(false);
+    this.toast.success('Wash approved', '120 hand towels moved into the 2:10pm cycle. Cover recalculated.');
+  }
+
+  protected adjust(item: string, delta: number): void {
+    this.store.adjustStock(item, delta);
+    this.toast.info('Stock adjusted', `${item} ${delta >= 0 ? '+' : ''}${delta} — recorded on the ledger.`);
+  }
+
+  protected transfer(): void {
+    this.store.adjustStock('Towel — Hand', 80);
+    this.toast.success('Transfer requested', '80 hand towels from Lakeside, arriving 1:30pm.');
+  }
+
 
   protected readonly rooms = [
     { name: 'Suite 1', state: 'Ready',    note: 'checked 08:12' },

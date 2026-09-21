@@ -1,6 +1,8 @@
-import { Component, ChangeDetectionStrategy, signal } from '@angular/core';
+import { Component, ChangeDetectionStrategy, signal, inject, computed } from '@angular/core';
 import { PageHeader } from '../../shared/components/page-header/page-header';
 import { StatePanel } from '../../shared/components/state-panel/state-panel';
+import { ToastService } from '../../core/services/toast.service';
+import { WorkspaceStore } from '../../core/services/workspace-store';
 
 @Component({
   selector: 'app-booking',
@@ -13,8 +15,8 @@ import { StatePanel } from '../../shared/components/state-panel/state-panel';
       title="Availability and booking"
       subtitle="Times are shown in the property's timezone and stay correct across daylight-saving changes."
     >
-      <button type="button" class="btn btn--secondary">Waitlist</button>
-      <button type="button" class="btn btn--primary">Hold slot</button>
+      <button type="button" class="btn btn--secondary" (click)="waitlist()">Waitlist</button>
+      <button type="button" class="btn btn--primary" (click)="hold()">Hold slot</button>
     </app-page-header>
 
     <div class="grid grid--split">
@@ -80,20 +82,46 @@ import { StatePanel } from '../../shared/components/state-panel/state-panel';
             <dl class="dl">
               <dt>Service</dt><dd>Deep tissue 90</dd>
               <dt>When</dt><dd class="numeric">{{ picked() || 'Pick a time' }}</dd>
+              <dt>Hold</dt><dd class="numeric">{{ held() ? held() + ' — 10 min' : 'None' }}</dd>
               <dt>Provider</dt><dd>Any available</dd>
               <dt>Deposit</dt><dd class="numeric">$60.00</dd>
               <dt>Balance</dt><dd class="numeric">$180.00</dd>
             </dl>
-            <button type="button" class="btn btn--primary btn--lg" [disabled]="!picked()">Continue to deposit</button>
+            <button type="button" class="btn btn--primary btn--lg" [disabled]="!canPay()" (click)="pay()">
+              @switch (payState()) {
+                @case ('paying')    { Contacting gateway… }
+                @case ('ambiguous') { Checking the original… }
+                @case ('done')      { Booked }
+                @default            { Continue to deposit }
+              }
+            </button>
             <p class="subtle">Card details are tokenized. We never see or store the full number.</p>
           </div>
         </div>
 
-        <app-state-panel
-          state="timeout"
-          title="Payment outcome unknown"
-          body="The gateway has not confirmed. We are checking the original request rather than charging again — do not retry."
-        />
+        @switch (payState()) {
+          @case ('ambiguous') {
+            <app-state-panel
+              state="timeout"
+              title="Payment outcome unknown"
+              body="The gateway has not confirmed. We are checking the original request by its idempotency key rather than charging again — do not retry."
+            />
+          }
+          @case ('done') {
+            <app-state-panel
+              state="queued"
+              title="Charged once, confirmed"
+              body="The original request settled. Querying rather than retrying is what stopped a double charge."
+            />
+          }
+          @default {
+            <app-state-panel
+              state="first-use"
+              title="Nothing booked yet"
+              body="Pick a time and continue — the deposit step deliberately demonstrates the ambiguous-outcome path."
+            />
+          }
+        }
       </div>
     </div>
   `,
@@ -131,7 +159,40 @@ import { StatePanel } from '../../shared/components/state-panel/state-panel';
   `],
 })
 export class Booking {
+  private readonly toast = inject(ToastService);
+  private readonly store = inject(WorkspaceStore);
+
   protected readonly picked = signal<string | null>(null);
+  protected readonly held = signal<string | null>(null);
+  protected readonly payState = signal<'idle' | 'paying' | 'ambiguous' | 'done'>('idle');
+
+  protected readonly canPay = computed(() => !!this.picked() && this.payState() === 'idle');
+
+  protected hold(): void {
+    if (!this.picked()) { this.toast.warn('Pick a time first', 'Choose a slot to hold it for ten minutes.'); return; }
+    this.held.set(this.picked());
+    this.toast.success('Slot held for 10 minutes', `${this.picked()} — the hold releases automatically if you do not confirm.`);
+  }
+
+  protected waitlist(): void {
+    this.toast.success('Added to the waitlist', 'We will message you if a slot opens, subject to your contact consent.');
+  }
+
+  /** Deliberately lands on the ambiguous outcome — the path that is hard to retrofit. */
+  protected async pay(): Promise<void> {
+    this.payState.set('paying');
+    await new Promise((r) => setTimeout(r, 900));
+    this.payState.set('ambiguous');
+    this.toast.warn(
+      'Payment outcome unknown',
+      'The gateway accepted the request but has not confirmed. We are querying the original — do not pay again.',
+      'SPMS-PAY-001',
+    );
+    await new Promise((r) => setTimeout(r, 1600));
+    this.payState.set('done');
+    this.store.createAppointment();
+    this.toast.success('Confirmed — charged once', 'The original request settled. No second charge was made.');
+  }
 
   protected readonly slots = [
     { time: '9:00am',  provider: 'Lena',  open: true },

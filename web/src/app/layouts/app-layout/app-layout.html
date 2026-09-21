@@ -5,6 +5,9 @@
   class="rail"
   [class.rail--collapsed]="collapsed()"
   [class.rail--open]="drawerOpen()"
+  [appFocusTrap]="drawerOpen()"
+  [attr.aria-modal]="drawerOpen() ? 'true' : null"
+  [attr.role]="drawerOpen() ? 'dialog' : null"
   aria-label="Workspace"
 >
   <div class="rail__brand">
@@ -30,7 +33,7 @@
   </div>
 
   <nav class="rail__nav">
-    @for (group of groups; track group.label) {
+    @for (group of groups(); track group.label) {
       <div class="rail__group">
         @if (!collapsed()) { <p class="rail__group-label">{{ group.label }}</p> }
         <ul>
@@ -49,10 +52,10 @@
                 </svg>
                 @if (!collapsed()) {
                   <span class="rail__label">{{ item.label }}</span>
-                  @if (item.badge) { <span class="rail__badge numeric">{{ item.badge }}</span> }
-                } @else if (item.badge) {
+                  @if (badgeFor(item); as n) { <span class="rail__badge numeric">{{ n }}</span> }
+                } @else if (badgeFor(item)) {
                   <span class="rail__dot" aria-hidden="true"></span>
-                  <span class="visually-hidden">{{ item.badge }} needing attention</span>
+                  <span class="visually-hidden">{{ badgeFor(item) }} needing attention</span>
                 }
               </a>
             </li>
@@ -105,8 +108,34 @@
         <path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14M20 20l-4-4"
               fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
       </svg>
-      <input type="search" placeholder="Search guests, rooms, staff…" aria-label="Search the workspace" />
+      <input
+        type="search"
+        placeholder="Jump to a screen…"
+        aria-label="Search the workspace"
+        role="combobox"
+        aria-expanded="false"
+        aria-controls="search-results"
+        [value]="query()"
+        (input)="query.set($any($event.target).value)"
+        (keydown.enter)="goToFirstMatch()"
+      />
       <kbd>/</kbd>
+
+      @if (matches().length) {
+        <ul class="results" id="search-results" role="listbox">
+          @for (m of matches(); track m.path) {
+            <li role="option" [attr.aria-selected]="$first">
+              <a [routerLink]="m.path" (click)="query.set('')">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path [attr.d]="m.icon" fill="none" stroke="currentColor" stroke-width="1.7"
+                        stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                {{ m.label }}
+              </a>
+            </li>
+          }
+        </ul>
+      }
     </div>
 
     <div class="topbar__actions">
@@ -139,11 +168,34 @@
       </button>
 
       <div class="account">
-        <span class="account__avatar" aria-hidden="true">OK</span>
-        <span class="account__text">
-          <span class="account__name">Owais K.</span>
-          <span class="account__role">Riverside Spa</span>
-        </span>
+        <button
+          type="button"
+          class="account__btn"
+          (click)="accountOpen.set(!accountOpen())"
+          [attr.aria-expanded]="accountOpen()"
+          aria-haspopup="menu"
+        >
+          <span class="account__avatar" aria-hidden="true">{{ auth.user()?.initials }}</span>
+          <span class="account__text">
+            <span class="account__name">{{ auth.user()?.name }}</span>
+            <span class="account__role">{{ auth.user()?.roleLabel }}</span>
+          </span>
+          <svg class="account__chev" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M6 9.5 12 15l6-5.5" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+
+        @if (accountOpen()) {
+          <div class="menu" role="menu" [appFocusTrap]="true">
+            <p class="menu__head">{{ auth.user()?.property }}</p>
+            <a class="menu__item" routerLink="/app/settings" role="menuitem" (click)="accountOpen.set(false)">Settings</a>
+            <button type="button" class="menu__item" role="menuitem" (click)="resetDemo()">Reset demo data</button>
+            <a class="menu__item" routerLink="/sign-in" role="menuitem" (click)="accountOpen.set(false)">Switch role</a>
+            <hr class="menu__rule" />
+            <button type="button" class="menu__item menu__item--danger" role="menuitem" (click)="signOut()">Sign out</button>
+          </div>
+        }
       </div>
     </div>
   </header>

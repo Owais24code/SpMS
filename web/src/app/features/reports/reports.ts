@@ -1,8 +1,10 @@
-import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
 import { PageHeader } from '../../shared/components/page-header/page-header';
 import { StatCard } from '../../shared/components/stat-card/stat-card';
 import { StatePanel } from '../../shared/components/state-panel/state-panel';
-import { WEEK_BOOKINGS, WEEK_LABELS } from '../../core/data/workspace-data';
+import { WorkspaceStore } from '../../core/services/workspace-store';
+import { ToastService } from '../../core/services/toast.service';
+import { AuthService } from '../../core/services/auth.service';
 
 @Component({
   selector: 'app-reports',
@@ -21,9 +23,10 @@ import { WEEK_BOOKINGS, WEEK_LABELS } from '../../core/data/workspace-data';
 
     <div class="stack">
       <div class="toolbar">
-        <button type="button" class="chip" aria-pressed="true">Riverside Spa</button>
-        <button type="button" class="chip">All properties</button>
-        <button type="button" class="chip">This week</button>
+        <button type="button" class="chip" [attr.aria-pressed]="scopeFilter() === 'property'" (click)="scopeFilter.set('property')">Riverside Spa</button>
+        <button type="button" class="chip" [attr.aria-pressed]="scopeFilter() === 'all'" (click)="scopeFilter.set('all')">All properties</button>
+        <button type="button" class="chip" [attr.aria-pressed]="store.range() === '7'" (click)="store.range.set('7')">7 days</button>
+        <button type="button" class="chip" [attr.aria-pressed]="store.range() === '30'" (click)="store.range.set('30')">30 days</button>
         <span class="row row--end subtle">Tie-out: matched at 12:19</span>
       </div>
 
@@ -45,12 +48,12 @@ import { WEEK_BOOKINGS, WEEK_LABELS } from '../../core/data/workspace-data';
           </div>
           <div class="panel__body">
             <div class="chart" role="img" aria-label="Bookings by day, rising from 52 on Monday to 95 on Saturday.">
-              @for (v of bookings; track $index) {
+              @for (v of bookings(); track $index) {
                 <div class="chart__col">
                   <span class="chart__bar" [style.height.%]="pct(v)">
                     <span class="chart__value numeric">{{ v }}</span>
                   </span>
-                  <span class="chart__label">{{ labels[$index] }}</span>
+                  <span class="chart__label">{{ labels()[$index] }}</span>
                 </div>
               }
             </div>
@@ -77,11 +80,20 @@ import { WEEK_BOOKINGS, WEEK_LABELS } from '../../core/data/workspace-data';
 
       <section aria-labelledby="fin-h">
         <h2 class="sec" id="fin-h">Financial</h2>
-        <app-state-panel
-          state="denied"
-          title="Financial figures need a finance role"
-          body="You can see that this section exists and when it was last tied out. Ask a finance approver for access to the values."
-        />
+        @if (auth.has('reports.financial')) {
+          <div class="grid grid--kpi">
+            <app-stat-card label="Treatment revenue" value="$48,210" delta="+9%" trend="up" tone="positive" hint="tied out 12:19" />
+            <app-stat-card label="Retail" value="$6,840" delta="+3%" trend="up" tone="positive" hint="tied out 12:19" />
+            <app-stat-card label="Refunds" value="$1,120" delta="-14%" trend="down" tone="positive" hint="lower is better" />
+            <app-stat-card label="Unreconciled" value="$416" tone="negative" hint="see Reconciliation" />
+          </div>
+        } @else {
+          <app-state-panel
+            state="denied"
+            title="Financial figures need a finance role"
+            body="You can see that this section exists and when it was last tied out. Sign in as Finance to see the values."
+          />
+        }
       </section>
     </div>
   `,
@@ -139,9 +151,32 @@ import { WEEK_BOOKINGS, WEEK_LABELS } from '../../core/data/workspace-data';
   `],
 })
 export class Reports {
-  protected readonly labels = WEEK_LABELS;
-  protected readonly bookings = WEEK_BOOKINGS;
-  private readonly peak = Math.max(...WEEK_BOOKINGS);
+  private readonly toast = inject(ToastService);
+  protected readonly store = inject(WorkspaceStore);
+  protected readonly auth = inject(AuthService);
+
+  protected readonly scopeFilter = signal<'property' | 'all'>('property');
+
+  protected readonly labels = computed(() => this.store.rangeLabels());
+  protected readonly bookings = computed(() =>
+    this.scopeFilter() === 'all'
+      ? this.store.series().map((v) => Math.round(v * 2.4))
+      : this.store.series());
+  private readonly peakOf = computed(() => Math.max(...this.bookings()));
+
+  protected exportReport(): void {
+    if (!this.auth.has('reports.export')) {
+      this.toast.error('Export needs a finance role',
+        'Your role can read operational figures but not export them.', 'SPMS-AUTH-001');
+      return;
+    }
+    this.toast.success('Export queued',
+      'Watermarked, with the filters and metric definitions attached.');
+  }
+
+  protected definitions(): void {
+    this.toast.info('Definitions', 'Utilisation = booked therapist minutes ÷ rostered minutes, excluding blocked rooms.');
+  }
 
   protected readonly mix = [
     { name: 'Deep tissue',  pct: 34, color: 'var(--grad-data-6)' },
@@ -152,6 +187,6 @@ export class Reports {
   ];
 
   protected pct(v: number): number {
-    return Math.round((v / this.peak) * 100);
+    return Math.round((v / this.peakOf()) * 100);
   }
 }

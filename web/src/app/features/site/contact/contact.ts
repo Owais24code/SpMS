@@ -1,6 +1,6 @@
 import { Component, ChangeDetectionStrategy, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
-import { inject } from '@angular/core';
+import { inject, afterNextRender, Injector } from '@angular/core';
 
 type SubmitState = 'idle' | 'submitting' | 'success' | 'error';
 
@@ -14,6 +14,7 @@ type SubmitState = 'idle' | 'submitting' | 'success' | 'error';
 })
 export class Contact {
   private readonly fb = inject(FormBuilder);
+  private readonly injector = inject(Injector);
 
   protected readonly state = signal<SubmitState>('idle');
 
@@ -41,12 +42,12 @@ export class Contact {
   protected async submit(): Promise<void> {
     if (this.form.invalid) {
       this.form.markAllAsTouched();
-      // Move focus to the first field in error so keyboard and screen-reader
-      // users are taken to the problem rather than left at the button.
-      queueMicrotask(() => {
-        const el = document.querySelector<HTMLElement>('[aria-invalid="true"]');
-        el?.focus();
-      });
+      // afterNextRender, not queueMicrotask: aria-invalid is written during
+      // change detection, so a microtask runs too early and finds nothing.
+      afterNextRender(
+        () => document.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus(),
+        { injector: this.injector },
+      );
       return;
     }
 

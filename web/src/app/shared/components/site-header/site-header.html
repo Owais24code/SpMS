@@ -94,6 +94,9 @@
   class="drawer"
   [class.drawer--open]="menuOpen()"
   [attr.inert]="menuOpen() ? null : ''"
+  [appFocusTrap]="menuOpen()"
+  [attr.aria-modal]="menuOpen() ? 'true' : null"
+  [attr.role]="menuOpen() ? 'dialog' : null"
   aria-label="Site menu"
 >
   <nav aria-label="Mobile">
