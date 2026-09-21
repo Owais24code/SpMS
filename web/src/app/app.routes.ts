@@ -1,5 +1,6 @@
 import { Routes } from '@angular/router';
 import { authGuard, scopeGuard } from './core/guards/auth.guard';
+import { SCOPES } from './core/models/contract';
 
 /** Public marketing surface. */
 const siteRoutes: Routes = [
@@ -20,18 +21,18 @@ const siteRoutes: Routes = [
  */
 const workspaceRoutes: Routes = [
   { path: '',               title: 'Dashboard — SpMS',      loadComponent: () => import('./features/dashboard/dashboard').then((m) => m.Dashboard) },
-  { path: 'schedule',       title: 'Schedule — SpMS',       canActivate: [scopeGuard('spa.schedule')],  loadComponent: () => import('./features/schedule/schedule').then((m) => m.Schedule) },
-  { path: 'check-in',       title: 'Check-in — SpMS',       canActivate: [scopeGuard('frontdesk')],     loadComponent: () => import('./features/check-in/check-in').then((m) => m.CheckIn) },
-  { path: 'treatments',     title: 'Treatments — SpMS',     canActivate: [scopeGuard('provider')],      loadComponent: () => import('./features/treatments/treatments').then((m) => m.Treatments) },
+  { path: 'schedule',       title: 'Schedule — SpMS',       canActivate: [scopeGuard(SCOPES.schedule)],  loadComponent: () => import('./features/schedule/schedule').then((m) => m.Schedule) },
+  { path: 'check-in',       title: 'Check-in — SpMS',       canActivate: [scopeGuard(SCOPES.guestWrite)],     loadComponent: () => import('./features/check-in/check-in').then((m) => m.CheckIn) },
+  { path: 'treatments',     title: 'Treatments — SpMS',     canActivate: [scopeGuard(SCOPES.healthRestricted)],      loadComponent: () => import('./features/treatments/treatments').then((m) => m.Treatments) },
   { path: 'booking',        title: 'Booking — SpMS',        loadComponent: () => import('./features/booking/booking').then((m) => m.Booking) },
   { path: 'appointments',   title: 'Appointments — SpMS',   loadComponent: () => import('./features/appointments/appointments').then((m) => m.Appointments) },
-  { path: 'messaging',      title: 'Messaging — SpMS',      canActivate: [scopeGuard('messaging.admin')], loadComponent: () => import('./features/messaging/messaging').then((m) => m.Messaging) },
-  { path: 'inventory',      title: 'Inventory — SpMS',      canActivate: [scopeGuard('inventory', 'housekeeping')], loadComponent: () => import('./features/inventory/inventory').then((m) => m.Inventory) },
-  { path: 'devices',        title: 'Devices — SpMS',        canActivate: [scopeGuard('device', 'device.assign')],   loadComponent: () => import('./features/devices/devices').then((m) => m.Devices) },
-  { path: 'staff',          title: 'Staff — SpMS',          canActivate: [scopeGuard('staff.read')],    loadComponent: () => import('./features/staff/staff').then((m) => m.Staff) },
-  { path: 'reconciliation', title: 'Reconciliation — SpMS', canActivate: [scopeGuard('reconcile')],     loadComponent: () => import('./features/reconciliation/reconciliation').then((m) => m.Reconciliation) },
-  { path: 'reports',        title: 'Reports — SpMS',        canActivate: [scopeGuard('reports')],       loadComponent: () => import('./features/reports/reports').then((m) => m.Reports) },
-  { path: 'integrations',   title: 'Integrations — SpMS',   canActivate: [scopeGuard('config.propose')], loadComponent: () => import('./features/integrations/integrations').then((m) => m.Integrations) },
+  { path: 'messaging',      title: 'Messaging — SpMS',      canActivate: [scopeGuard(SCOPES.messaging)], loadComponent: () => import('./features/messaging/messaging').then((m) => m.Messaging) },
+  { path: 'inventory',      title: 'Inventory — SpMS',      canActivate: [scopeGuard(SCOPES.inventory)], loadComponent: () => import('./features/inventory/inventory').then((m) => m.Inventory) },
+  { path: 'devices',        title: 'Devices — SpMS',        canActivate: [scopeGuard(SCOPES.device)],   loadComponent: () => import('./features/devices/devices').then((m) => m.Devices) },
+  { path: 'staff',          title: 'Staff — SpMS',          canActivate: [scopeGuard(SCOPES.workforceRead)],    loadComponent: () => import('./features/staff/staff').then((m) => m.Staff) },
+  { path: 'reconciliation', title: 'Reconciliation — SpMS', canActivate: [scopeGuard(SCOPES.reconcile)],     loadComponent: () => import('./features/reconciliation/reconciliation').then((m) => m.Reconciliation) },
+  { path: 'reports',        title: 'Reports — SpMS',        canActivate: [scopeGuard(SCOPES.read)],       loadComponent: () => import('./features/reports/reports').then((m) => m.Reports) },
+  { path: 'integrations',   title: 'Integrations — SpMS',   canActivate: [scopeGuard(SCOPES.admin)], loadComponent: () => import('./features/integrations/integrations').then((m) => m.Integrations) },
   { path: 'settings',       title: 'Settings — SpMS',       loadComponent: () => import('./features/settings/settings').then((m) => m.Settings) },
   { path: 'forbidden',      title: 'No access — SpMS',      loadComponent: () => import('./features/auth/forbidden/forbidden').then((m) => m.Forbidden) },
 ];

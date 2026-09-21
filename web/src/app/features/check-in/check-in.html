@@ -29,10 +29,9 @@
       state="empty"
       [title]="term() ? 'No arrival matches “' + term() + '”' : 'Nothing in this view'"
       body="Clear the search or switch filter to see the rest of today."
+      [actionBound]="term().length > 0 || filter() !== 'all'"
+      (action)="clearFilters()"
     />
-    <div class="row" style="justify-content:center">
-      <button type="button" class="btn btn--secondary" (click)="clearFilters()">Clear filters</button>
-    </div>
   } @else {
     <div class="panel">
       <div class="panel__body panel__body--flush">

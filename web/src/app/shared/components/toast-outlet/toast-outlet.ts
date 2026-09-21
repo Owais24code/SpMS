@@ -43,13 +43,16 @@ import { ToastService } from '../../../core/services/toast.service';
     .toasts {
       position: fixed;
       z-index: 200;
+      /* Bottom-right, not centre: a centred stack sat on top of the primary
+         actions at the foot of long screens and swallowed their clicks. */
       bottom: var(--space-5);
-      inset-inline-start: 50%;
-      transform: translateX(-50%);
+      inset-inline-end: var(--space-5);
       display: flex;
       flex-direction: column;
       gap: var(--space-2);
-      width: min(94vw, 460px);
+      width: min(92vw, 400px);
+      max-height: 60vh;
+      overflow: hidden;
       pointer-events: none;
     }
 

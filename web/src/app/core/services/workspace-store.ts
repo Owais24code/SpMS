@@ -7,6 +7,7 @@ import {
   APPOINTMENTS, ARRIVALS, DEVICES, LEDGER, MESSAGE_RULES,
   OWNERS, STAFF, STOCK, LANES, WEEK_BOOKINGS, WEEK_LABELS,
 } from '../data/workspace-data';
+import { API_ERROR } from '../models/contract';
 
 export interface AuditEntry {
   readonly at: string;
@@ -19,9 +20,9 @@ export interface AuditEntry {
 /** What a write can come back as. Mirrors the API's OptimisticResult. */
 export type WriteResult<T> =
   | { kind: 'committed'; value: T }
-  | { kind: 'stale'; current: T; code: 'SPMS-CONC-001' }
-  | { kind: 'ambiguous'; code: 'SPMS-PAY-001' }
-  | { kind: 'denied'; code: 'SPMS-AUTH-001' };
+  | { kind: 'stale'; current: T; code: typeof API_ERROR.staleVersion.code }
+  | { kind: 'ambiguous'; code: typeof API_ERROR.paymentOutcomeAmbiguous.code }
+  | { kind: 'denied'; code: typeof API_ERROR.authorizationDenied.code };
 
 const now = () =>
   new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' }).format(new Date());
@@ -86,9 +87,9 @@ export class WorkspaceStore {
   async checkIn(id: string): Promise<WriteResult<string>> {
     await this.settle();
     const row = this.arrivals().find((a) => a.id === id);
-    if (!row) return { kind: 'denied', code: 'SPMS-AUTH-001' };
+    if (!row) return { kind: 'denied', code: API_ERROR.authorizationDenied.code };
     if (!(row.formsComplete && row.depositSettled && row.roomReady)) {
-      return { kind: 'denied', code: 'SPMS-AUTH-001' };
+      return { kind: 'denied', code: API_ERROR.authorizationDenied.code };
     }
     this.checkedIn.update((l) => [...l, id]);
     this.record('Check-in', `${row.guestAlias} checked in`);
@@ -140,13 +141,13 @@ export class WorkspaceStore {
   async resolveConflict(id: string, reason: string): Promise<WriteResult<Appointment>> {
     await this.settle();
     const appt = this.appointments().find((a) => a.id === id);
-    if (!appt) return { kind: 'denied', code: 'SPMS-AUTH-001' };
+    if (!appt) return { kind: 'denied', code: API_ERROR.authorizationDenied.code };
 
     this.appointments.update((list) =>
       list.map((a) => (a.id === id ? { ...a, state: 'booked', version: bump(a.version) } : a)));
     this.lanes.update((ls) =>
       ls.map((l) => ({ ...l, slots: l.slots.map((s) => s.state === 'conflict' ? { ...s, state: 'booked', label: 'Rebooked' } : s) })));
-    this.record('Conflict overridden', `${appt.guestAlias} — ${reason}`, 'SCHED-PROVIDER-BUSY');
+    this.record('Conflict overridden', `${appt.guestAlias} — ${reason}`, 'CON-001');
     return { kind: 'committed', value: appt };
   }
 
@@ -238,16 +239,16 @@ export class WorkspaceStore {
   async queryOriginal(id: string): Promise<WriteResult<LedgerRow>> {
     await this.settle(900);
     const row = this.ledger().find((t) => t.id === id);
-    if (!row) return { kind: 'denied', code: 'SPMS-AUTH-001' };
+    if (!row) return { kind: 'denied', code: API_ERROR.authorizationDenied.code };
 
     // Two thirds of the time the gateway now confirms; otherwise still unknown.
     if (Math.random() > 0.34) {
       this.ledger.update((ts) => ts.map((t) => t.id === id ? { ...t, state: 'matched' } : t));
-      this.record('Ambiguous transaction resolved', `${id} confirmed captured`, 'SPMS-PAY-001');
+      this.record('Ambiguous transaction resolved', `${id} confirmed captured`, API_ERROR.paymentOutcomeAmbiguous.code);
       return { kind: 'committed', value: row };
     }
-    this.record('Ambiguous transaction still unknown', id, 'SPMS-PAY-001');
-    return { kind: 'ambiguous', code: 'SPMS-PAY-001' };
+    this.record('Ambiguous transaction still unknown', id, API_ERROR.paymentOutcomeAmbiguous.code);
+    return { kind: 'ambiguous', code: API_ERROR.paymentOutcomeAmbiguous.code };
   }
 
   resolveLedger(id: string, disposition: string): void {

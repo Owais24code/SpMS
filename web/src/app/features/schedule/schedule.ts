@@ -4,8 +4,9 @@ import { FocusTrapDirective } from '../../shared/directives/focus-trap.directive
 import { WorkspaceStore } from '../../core/services/workspace-store';
 import { ToastService } from '../../core/services/toast.service';
 import { ConfirmService } from '../../core/services/confirm.service';
-import { HOURS, ACTIVE_CONFLICT, HARD_CONFLICT } from '../../core/data/workspace-data';
-import type { Conflict } from '../../core/models/spa.model';
+import { HOURS } from '../../core/data/workspace-data';
+import { CONFLICTS, type ConflictDefinition } from '../../core/models/contract';
+
 
 type LaneFilter = 'all' | 'providers' | 'rooms';
 
@@ -28,7 +29,7 @@ export class Schedule {
   protected readonly dayOffset = signal(0);
 
   /** Closed on load. A screen you navigated to should not open behind a modal. */
-  protected readonly drawer = signal<Conflict | null>(null);
+  protected readonly drawer = signal<ConflictDefinition | null>(null);
   protected readonly reason = signal('');
   protected readonly committing = signal(false);
 
@@ -51,8 +52,8 @@ export class Schedule {
     if (this.drawer()) this.close();
   }
 
-  protected openSoft(): void { this.reason.set(''); this.drawer.set(ACTIVE_CONFLICT); }
-  protected openHard(): void { this.reason.set(''); this.drawer.set(HARD_CONFLICT); }
+  protected openSoft(): void { this.reason.set(''); this.drawer.set(CONFLICTS['CON-001']); }
+  protected openHard(): void { this.reason.set(''); this.drawer.set(CONFLICTS['CON-002']); }
 
   protected onSlot(state: string): void {
     if (state === 'conflict') this.openSoft();
@@ -64,7 +65,7 @@ export class Schedule {
 
   protected canCommit(): boolean {
     const c = this.drawer();
-    return !!c && c.severity === 'soft' && this.reason().trim().length > 3 && !this.committing();
+    return !!c && c.overridable && this.reason().trim().length > 3 && !this.committing();
   }
 
   protected async commit(): Promise<void> {
@@ -114,4 +115,28 @@ export class Schedule {
   }
 
   protected setFilter(f: LaneFilter): void { this.laneFilter.set(f); }
+
+  /**
+   * CON-002 requires ranked, one-click resolutions per conflict class.
+   * Replace with the server's suggestions once /schedule/preflight returns
+   * them — the shape is already right.
+   */
+  protected resolutionsFor(code: string): readonly string[] {
+    const map: Record<string, readonly string[]> = {
+      'CON-001': ['Move to Priya Nair, free from 1:00pm',
+                  'Shift the new booking to 2:45pm',
+                  'Split across Suite 2 with a second therapist'],
+      'CON-002': ['Use Suite 3, free from 1:30pm',
+                  'Move the booking to 3:15pm'],
+      'CON-003': ['Choose a qualified provider',
+                  'Change to a service this provider is licensed for'],
+      'CON-004': ['Extend turnover to 30 minutes',
+                  'Move to the next free slot'],
+      'CON-005': ['Change the guest\'s second booking',
+                  'Record an authorised acknowledgment'],
+      'CON-006': ['Re-quote at the current catalogue price'],
+      'CON-007': ['Retry once the dependency responds'],
+    };
+    return map[code] ?? [];
+  }
 }

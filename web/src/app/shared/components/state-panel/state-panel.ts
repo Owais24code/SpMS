@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, input, computed } from '@angular/core';
+import { Component, ChangeDetectionStrategy, input, output, computed } from '@angular/core';
 
 export type ScreenState =
   | 'loading' | 'empty' | 'first-use' | 'stale' | 'conflict'
@@ -39,8 +39,12 @@ interface StatePreset {
       <p class="sp__title">{{ title() || preset().title }}</p>
       <p class="sp__body">{{ body() || preset().body }}</p>
 
-      @if (preset().action) {
-        <button type="button" class="btn btn--secondary">{{ preset().action }}</button>
+      <!-- Only offered when a caller has bound (action); an unwired button
+           that looks clickable is worse than no button. -->
+      @if (preset().action && actionBound()) {
+        <button type="button" class="btn btn--secondary" (click)="action.emit()">
+          {{ actionLabel() || preset().action }}
+        </button>
       }
     </div>
   `,
@@ -108,6 +112,12 @@ export class StatePanel {
   readonly state = input.required<ScreenState>();
   readonly title = input<string>('');
   readonly body = input<string>('');
+
+  /** Set to true by a caller that binds (action). */
+  readonly actionBound = input<boolean>(false);
+  readonly actionLabel = input<string>('');
+
+  readonly action = output<void>();
 
   /** Errors are announced; quiet states are not, to avoid chatter. */
   protected readonly live = computed(() =>

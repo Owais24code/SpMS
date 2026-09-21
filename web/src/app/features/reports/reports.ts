@@ -5,6 +5,7 @@ import { StatePanel } from '../../shared/components/state-panel/state-panel';
 import { WorkspaceStore } from '../../core/services/workspace-store';
 import { ToastService } from '../../core/services/toast.service';
 import { AuthService } from '../../core/services/auth.service';
+import { SCOPES, API_ERROR } from '../../core/models/contract';
 
 @Component({
   selector: 'app-reports',
@@ -17,8 +18,8 @@ import { AuthService } from '../../core/services/auth.service';
       title="Reports"
       subtitle="Every figure links to its definition, and exports carry the filters and definitions that produced them."
     >
-      <button type="button" class="btn btn--secondary">Manage definitions</button>
-      <button type="button" class="btn btn--primary">Export</button>
+      <button type="button" class="btn btn--secondary" (click)="definitions()">Manage definitions</button>
+      <button type="button" class="btn btn--primary" (click)="exportReport()">Export</button>
     </app-page-header>
 
     <div class="stack">
@@ -80,7 +81,7 @@ import { AuthService } from '../../core/services/auth.service';
 
       <section aria-labelledby="fin-h">
         <h2 class="sec" id="fin-h">Financial</h2>
-        @if (auth.has('reports.financial')) {
+        @if (auth.has(SCOPES.commerce)) {
           <div class="grid grid--kpi">
             <app-stat-card label="Treatment revenue" value="$48,210" delta="+9%" trend="up" tone="positive" hint="tied out 12:19" />
             <app-stat-card label="Retail" value="$6,840" delta="+3%" trend="up" tone="positive" hint="tied out 12:19" />
@@ -157,6 +158,9 @@ export class Reports {
 
   protected readonly scopeFilter = signal<'property' | 'all'>('property');
 
+  /** Exposed so the template can gate the financial section on the real scope. */
+  protected readonly SCOPES = SCOPES;
+
   protected readonly labels = computed(() => this.store.rangeLabels());
   protected readonly bookings = computed(() =>
     this.scopeFilter() === 'all'
@@ -165,9 +169,9 @@ export class Reports {
   private readonly peakOf = computed(() => Math.max(...this.bookings()));
 
   protected exportReport(): void {
-    if (!this.auth.has('reports.export')) {
+    if (!this.auth.has(SCOPES.commerce)) {
       this.toast.error('Export needs a finance role',
-        'Your role can read operational figures but not export them.', 'SPMS-AUTH-001');
+        'Your role can read operational figures but not export them.', API_ERROR.authorizationDenied.code);
       return;
     }
     this.toast.success('Export queued',

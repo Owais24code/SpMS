@@ -63,7 +63,7 @@ export class SignIn {
     ...ROLE_PRESETS[key],
   }));
 
-  protected readonly picked = signal<RoleKey>('manager');
+  protected readonly picked = signal<RoleKey>('spa_manager');
 
   protected go(): void {
     this.auth.signIn(this.picked());

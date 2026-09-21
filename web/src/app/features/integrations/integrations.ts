@@ -3,6 +3,7 @@ import { PageHeader } from '../../shared/components/page-header/page-header';
 import { WorkspaceStore } from '../../core/services/workspace-store';
 import { ToastService } from '../../core/services/toast.service';
 import { ConfirmService } from '../../core/services/confirm.service';
+import { API_ERROR } from '../../core/models/contract';
 
 @Component({
   selector: 'app-integrations',
@@ -161,7 +162,7 @@ export class Integrations {
     if (outcome === 'pass') {
       this.toast.success('Preflight passed', 'Activation is unblocked, pending a second approver.');
     } else {
-      this.toast.warn('Preflight failed', 'The outage readiness runbook is missing. Activation stays blocked.', 'SPMS-CFG-002');
+      this.toast.warn('Preflight failed', 'The outage readiness runbook is missing. Activation stays blocked.', API_ERROR.preflightExpired.code);
     }
   }
 
@@ -181,7 +182,7 @@ export class Integrations {
     this.toast.error(
       'You proposed this change',
       'A second approver must sign it off. This is enforced server-side, not just hidden here.',
-      'SPMS-CFG-003',
+      API_ERROR.authorizationDenied.code,
     );
   }
 }

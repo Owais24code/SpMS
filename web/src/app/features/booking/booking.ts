@@ -3,6 +3,7 @@ import { PageHeader } from '../../shared/components/page-header/page-header';
 import { StatePanel } from '../../shared/components/state-panel/state-panel';
 import { ToastService } from '../../core/services/toast.service';
 import { WorkspaceStore } from '../../core/services/workspace-store';
+import { API_ERROR } from '../../core/models/contract';
 
 @Component({
   selector: 'app-booking',
@@ -186,7 +187,7 @@ export class Booking {
     this.toast.warn(
       'Payment outcome unknown',
       'The gateway accepted the request but has not confirmed. We are querying the original — do not pay again.',
-      'SPMS-PAY-001',
+      API_ERROR.paymentOutcomeAmbiguous.code,
     );
     await new Promise((r) => setTimeout(r, 1600));
     this.payState.set('done');

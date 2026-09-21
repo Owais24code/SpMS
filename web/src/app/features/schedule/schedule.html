@@ -122,8 +122,8 @@
     [appFocusTrap]="true"
   >
     <header class="cdrawer__head">
-      <span class="badge" [class.badge--warn]="c.severity === 'soft'" [class.badge--danger]="c.severity === 'hard'">
-        {{ c.severity === 'soft' ? 'Soft conflict' : 'Hard conflict' }}
+      <span class="badge" [class.badge--warn]="c.overridable" [class.badge--danger]="!c.overridable">
+        {{ c.overridable ? 'Soft conflict — override permitted' : 'Hard conflict — not overridable' }}
       </span>
       <button type="button" class="cdrawer__close" (click)="close()" aria-label="Close conflict panel">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -135,24 +135,27 @@
     <div class="cdrawer__body stack">
       <div>
         <h2 class="cdrawer__title" id="cdrawer-title">{{ c.summary }}</h2>
-        <p class="cdrawer__code numeric">{{ c.code }}</p>
+        <p class="cdrawer__code numeric">{{ c.code }} · {{ c.severity }}</p>
       </div>
 
-      <div class="cdrawer__consequence" [class.is-hard]="c.severity === 'hard'">
-        <p class="subtle">What happens if you continue</p>
-        <p>{{ c.consequence }}</p>
+      <!-- CON-001 requires operational AND financial impact to be stated. -->
+      <div class="cdrawer__consequence" [class.is-hard]="!c.overridable">
+        <p class="subtle">Operational impact</p>
+        <p>{{ c.operationalImpact }}</p>
+        <p class="subtle" style="margin-top: var(--space-3)">Financial impact</p>
+        <p>{{ c.financialImpact }}</p>
       </div>
 
       <div>
-        <p class="subtle">Alternatives</p>
+        <p class="subtle">Ranked resolutions</p>
         <ul class="cdrawer__alts">
-          @for (a of c.alternatives; track a) {
+          @for (a of resolutionsFor(c.code); track a) {
             <li><button type="button" (click)="applyAlternative(a)">{{ a }}</button></li>
           }
         </ul>
       </div>
 
-      @if (c.severity === 'soft') {
+      @if (c.overridable) {
         <div>
           <label for="reason">Reason for override <span class="req">*</span></label>
           <textarea
@@ -183,7 +186,7 @@
         [attr.aria-disabled]="!canCommit()"
         (click)="commit()"
       >
-        {{ c.severity === 'hard' ? 'Cannot commit'
+        {{ !c.overridable ? 'Cannot commit'
            : committing() ? 'Committing…' : 'Override and commit' }}
       </button>
     </footer>

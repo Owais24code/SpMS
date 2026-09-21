@@ -7,6 +7,7 @@ import { AuthService } from '../../core/services/auth.service';
 import { WorkspaceStore } from '../../core/services/workspace-store';
 import { ToastService } from '../../core/services/toast.service';
 import { WORKSPACE_NAV, type NavItem } from '../../core/models/nav.model';
+import { SCOPES } from '../../core/models/contract';
 import { FocusTrapDirective } from '../../shared/directives/focus-trap.directive';
 
 @Component({
@@ -107,16 +108,16 @@ export class AppLayout {
 
   private canSee(item: NavItem): boolean {
     const need: Record<string, string[]> = {
-      '/app/schedule': ['spa.schedule'],
-      '/app/check-in': ['frontdesk'],
-      '/app/treatments': ['provider'],
-      '/app/messaging': ['messaging.admin'],
-      '/app/inventory': ['inventory', 'housekeeping'],
-      '/app/devices': ['device', 'device.assign'],
-      '/app/staff': ['staff.read'],
-      '/app/reconciliation': ['reconcile'],
-      '/app/reports': ['reports'],
-      '/app/integrations': ['config.propose'],
+      '/app/schedule':       [SCOPES.schedule],
+      '/app/check-in':       [SCOPES.guestWrite],
+      '/app/treatments':     [SCOPES.healthRestricted],
+      '/app/messaging':      [SCOPES.messaging],
+      '/app/inventory':      [SCOPES.inventory],
+      '/app/devices':        [SCOPES.device],
+      '/app/staff':          [SCOPES.workforceRead],
+      '/app/reconciliation': [SCOPES.reconcile],
+      '/app/reports':        [SCOPES.read],
+      '/app/integrations':   [SCOPES.admin],
     };
     const scopes = need[item.path];
     return !scopes || this.auth.hasAny(scopes);
