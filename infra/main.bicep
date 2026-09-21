@@ -65,9 +65,13 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
   kind: 'StorageV2'
   properties: {
-    // Static website hosting reads $web anonymously; without this the account
-    // would accept the upload and answer every request with 409.
-    allowBlobPublicAccess: true
+    // False, and static website hosting still works: $web is always publicly
+    // accessible through the web endpoint regardless of this setting, which
+    // governs anonymous access to ORDINARY containers. Setting it true — as an
+    // earlier version of this file did, on the assumption that the web
+    // endpoint depended on it — would let any container on the account be
+    // opened to anonymous reads, which is a real loosening bought for nothing.
+    allowBlobPublicAccess: false
     allowSharedKeyAccess: true
     supportsHttpsTrafficOnly: true
     minimumTlsVersion: 'TLS1_2'
