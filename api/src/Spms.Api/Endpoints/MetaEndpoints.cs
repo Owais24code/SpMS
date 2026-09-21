@@ -58,11 +58,12 @@ public static class MetaEndpoints
         app.MapGet("/audit", Audit);
     }
 
-    private static IResult Services(HttpContext http)
+    private static async Task<IResult> Services(
+        HttpContext http, IServiceCatalog services, CancellationToken ct)
     {
         var ctx = RequestContext.From(http);
         if (Guard.RequireScope(ctx, SpaScopes.Read) is { } denied) return denied;
-        return Results.Json(ServiceCatalog.Services, Json.Options);
+        return Results.Json(await services.ListAsync(ctx.TenantId, ct), Json.Options);
     }
 
     private static async Task<IResult> Audit(

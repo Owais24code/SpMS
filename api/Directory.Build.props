@@ -7,5 +7,28 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <!--
+      NU1603: "package X depends on Y (>= 8.0.2) but 8.0.2 was not found; an
+      approximate best match of 9.0.7 was resolved."
+
+      Suppressed deliberately, and only this one code. nuget.org is unreachable
+      from the build environment, so packages come from the vendored feed in
+      vendor/nuget, which carries one version of each package rather than every
+      historical patch. A transitive floor of 8.0.2 satisfied by 9.0.7 is
+      correct — it is higher and compatible — but NuGet reports it because the
+      exact floor is absent from the feed. Vendoring each floor does not help:
+      every floor version drags in floors of its own, so the chain never
+      terminates.
+
+      What this does NOT hide: NU1101 (package missing entirely), NU1102
+      (no version satisfies the range) and NU1605 (downgrade) all still fail
+      the build, so a genuinely unresolvable or downgraded dependency is still
+      caught.
+    -->
+    <NoWarn>$(NoWarn);NU1603</NoWarn>
+
+    <!-- The feed is a directory of .nupkg files; there are no signatures to check. -->
+    <RestoreDisableParallel>false</RestoreDisableParallel>
   </PropertyGroup>
 </Project>

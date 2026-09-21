@@ -81,6 +81,31 @@ public static class LocalClock
         }
     }
 
+    /// <summary>
+    /// The instant at which a calendar day begins at the property.
+    ///
+    /// Both /availability and /appointments?date= answer a question about a
+    /// business day, so both have to mean the same day. They did not: the grid
+    /// was built in the property's zone while the list was built from UTC
+    /// midnight, so a property at a large positive offset lost its morning
+    /// from the board while the grid still showed it. One function, called by
+    /// both, is what keeps that from drifting apart again.
+    ///
+    /// A date that does not exist locally (spring-forward) is nudged past the
+    /// gap rather than throwing on one day a year, and an unresolvable zone
+    /// falls back to UTC rather than taking the board down.
+    /// </summary>
+    public static DateTimeOffset DayStartUtc(DateOnly day, string timeZoneId)
+    {
+        var tz = Resolve(timeZoneId);
+        var localMidnight = new DateTime(day.Year, day.Month, day.Day, 0, 0, 0, DateTimeKind.Unspecified);
+
+        if (tz is null) return new DateTimeOffset(localMidnight, TimeSpan.Zero);
+
+        if (tz.IsInvalidTime(localMidnight)) localMidnight = localMidnight.AddHours(1);
+        return new DateTimeOffset(localMidnight, tz.GetUtcOffset(localMidnight)).ToUniversalTime();
+    }
+
     public static string Label(DateTimeOffset instant, string timeZoneId)
     {
         var tz = Resolve(timeZoneId);

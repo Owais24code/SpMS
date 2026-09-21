@@ -43,6 +43,30 @@ public sealed class InMemoryAppointmentRepository : IAppointmentRepository
         }
     }
 
+    public Task<IReadOnlyList<Appointment>> ListPageAsync(
+        string tenantId, string propertyId, DateTimeOffset fromUtc, DateTimeOffset toUtc,
+        int offset, int limit, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            var rows = _byId.Values
+                .Where(a => a.TenantId == tenantId && a.PropertyId == propertyId && a.Overlaps(fromUtc, toUtc))
+                .OrderBy(a => a.StartUtc).ThenBy(a => a.AppointmentId, StringComparer.Ordinal)
+                .Skip(offset).Take(limit)
+                .Select(a => a.Copy())
+                .ToList();
+            return Task.FromResult<IReadOnlyList<Appointment>>(rows);
+        }
+    }
+
+    public Task<int> CountOverlappingAsync(
+        string tenantId, string propertyId, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default)
+    {
+        lock (_gate)
+            return Task.FromResult(_byId.Values.Count(
+                a => a.TenantId == tenantId && a.PropertyId == propertyId && a.Overlaps(fromUtc, toUtc)));
+    }
+
     public Task<bool> TryAddAsync(Appointment appointment, CancellationToken ct = default)
     {
         lock (_gate)
@@ -145,6 +169,17 @@ public sealed class InMemoryIdempotencyStore : IIdempotencyStore
         return Task.CompletedTask;
     }
 
+    public Task<int> SweepAsync(DateTimeOffset nowUtc, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            var stale = _slots.Where(kv => kv.Value.Completed && nowUtc - kv.Value.AtUtc > CompletedTtl)
+                              .Select(kv => kv.Key).ToList();
+            foreach (var k in stale) _slots.Remove(k);
+            return Task.FromResult(stale.Count);
+        }
+    }
+
     private void Evict(DateTimeOffset nowUtc)
     {
         foreach (var stale in _slots.Where(kv => kv.Value.Completed && nowUtc - kv.Value.AtUtc > CompletedTtl)
@@ -179,13 +214,13 @@ public sealed class InMemoryPreflightStore : IPreflightStore
         lock (_gate) return Task.FromResult(_tokens.Remove(Scope(tenantId, token)));
     }
 
-    public int EvictExpired(DateTimeOffset nowUtc)
+    public Task<int> EvictExpiredAsync(DateTimeOffset nowUtc, CancellationToken ct = default)
     {
         lock (_gate)
         {
             var dead = _tokens.Where(kv => kv.Value.IsExpired(nowUtc)).Select(kv => kv.Key).ToList();
             foreach (var k in dead) _tokens.Remove(k);
-            return dead.Count;
+            return Task.FromResult(dead.Count);
         }
     }
 

@@ -34,7 +34,8 @@ public static class SchedulingEndpoints
     /* ----------------------------- availability ---------------------------- */
 
     private static async Task<IResult> Availability(
-        HttpContext http, IAppointmentRepository repo, string? date, string? serviceId, CancellationToken ct)
+        HttpContext http, IAppointmentRepository repo, IServiceCatalog services,
+        IPropertyDirectory properties, string? date, string? serviceId, CancellationToken ct)
     {
         var ctx = RequestContext.From(http);
         if (Guard.RequireScope(ctx, SpaScopes.Read) is { } denied) return denied;
@@ -52,34 +53,23 @@ public static class SchedulingEndpoints
         CatalogService? service = null;
         if (wanted is not null)
         {
-            service = ServiceCatalog.Find(wanted);
+            service = await services.FindAsync(ctx.TenantId, wanted, ct);
             if (service is null)
                 return Problem.From(ApiError.ValidationFailed, ctx.CorrelationId, "Unknown serviceId.",
                     extensions: Problem.Ext("known_services",
-                        ServiceCatalog.Services.Select(s => s.ServiceId).ToArray()));
+                        (await services.ListAsync(ctx.TenantId, ct)).Select(s => s.ServiceId).ToArray()));
         }
 
         var duration = service?.DurationMinutes ?? 60;
-        var profile = PropertyDirectory.For(ctx.PropertyId);
 
-        // The business day is built in the PROPERTY's zone. It was built from
-        // UTC midnight, so a 09:00–17:00 grid for a New York property actually
-        // ran 05:00–13:00 local while reporting the UTC clock as "local".
-        var tz = LocalClock.Resolve(profile.TimeZoneId);
-        var localMidnight = new DateTime(day.Year, day.Month, day.Day, 0, 0, 0, DateTimeKind.Unspecified);
+        var profile = await properties.FindAsync(ctx.TenantId, ctx.PropertyId, ct);
+        if (profile is null)
+            return Problem.From(ApiError.NotFound, ctx.CorrelationId, "This tenant has no such property.");
 
-        DateTimeOffset dayStartUtc;
-        if (tz is null)
-        {
-            dayStartUtc = new DateTimeOffset(localMidnight, TimeSpan.Zero);
-        }
-        else
-        {
-            // A date that does not exist locally (spring-forward) would throw;
-            // nudging past the gap is better than a 500 on one day a year.
-            if (tz.IsInvalidTime(localMidnight)) localMidnight = localMidnight.AddHours(1);
-            dayStartUtc = new DateTimeOffset(localMidnight, tz.GetUtcOffset(localMidnight)).ToUniversalTime();
-        }
+        // The business day is built in the PROPERTY's zone, by the same
+        // function /appointments?date= uses, so the two cannot disagree about
+        // which day they are describing.
+        var dayStartUtc = LocalClock.DayStartUtc(day, profile.TimeZoneId);
 
         if (!Guard.IsSaneInstant(dayStartUtc))
             return Problem.From(ApiError.ValidationFailed, ctx.CorrelationId, "date must fall between 2000 and 2100.");

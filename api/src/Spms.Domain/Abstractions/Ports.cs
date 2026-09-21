@@ -23,6 +23,26 @@ public interface IAppointmentRepository
     Task<IReadOnlyList<Appointment>> ListOverlappingAsync(
         string tenantId, string propertyId, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default);
 
+    /// <summary>
+    /// One page of the same interval query, paged in the store rather than in
+    /// memory. Fetching a whole 62-day window and slicing it afterwards paid
+    /// the full server-side cost the paging exists to avoid.
+    /// </summary>
+    Task<IReadOnlyList<Appointment>> ListPageAsync(
+        string tenantId, string propertyId, DateTimeOffset fromUtc, DateTimeOffset toUtc,
+        int offset, int limit, CancellationToken ct = default);
+
+    Task<int> CountOverlappingAsync(
+        string tenantId, string propertyId, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default);
+
+    /// <summary>
+    /// Inserts, or returns false if that id is already taken.
+    ///
+    /// Throws <see cref="RoomOverlapException"/> when the store's own
+    /// room-overlap constraint refuses the row — CON-002 is enforced in the
+    /// database, so the adapter has to hand that refusal back as a domain
+    /// outcome rather than let a driver exception escape.
+    /// </summary>
     Task<bool> TryAddAsync(Appointment appointment, CancellationToken ct = default);
 
     /// <summary>
@@ -54,6 +74,9 @@ public interface IIdempotencyStore
 
     /// <summary>Releases a reservation whose request failed, so a retry is possible.</summary>
     Task AbandonAsync(IdempotencyScope scope, CancellationToken ct = default);
+
+    /// <summary>Drops completed records past their retention. Returns how many.</summary>
+    Task<int> SweepAsync(DateTimeOffset nowUtc, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -83,8 +106,12 @@ public interface IPreflightStore
     /// <summary>Consumes the token. Returns false if someone else took it first.</summary>
     Task<bool> TryConsumeAsync(string tenantId, string token, CancellationToken ct = default);
 
-    /// <summary>Drops expired tokens. Called opportunistically; without it the store grows forever.</summary>
-    int EvictExpired(DateTimeOffset nowUtc);
+    /// <summary>
+    /// Drops expired tokens and returns how many. Called opportunistically;
+    /// without it the store grows forever. Async because against a database it
+    /// is a DELETE, and a synchronous one would block a request thread.
+    /// </summary>
+    Task<int> EvictExpiredAsync(DateTimeOffset nowUtc, CancellationToken ct = default);
 }
 
 public interface IAuditSink

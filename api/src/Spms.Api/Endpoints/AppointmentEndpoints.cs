@@ -45,7 +45,7 @@ public static class AppointmentEndpoints
     /* -------------------------------- list --------------------------------- */
 
     private static async Task<IResult> List(
-        HttpContext http, IAppointmentRepository repo,
+        HttpContext http, IAppointmentRepository repo, IPropertyDirectory properties,
         string? date, string? from, string? to, int? offset, int? limit, CancellationToken ct)
     {
         var ctx = RequestContext.From(http);
@@ -66,8 +66,18 @@ public static class AppointmentEndpoints
             // A calendar day is still served, but as an explicit interval so an
             // appointment running across midnight is returned by the day it
             // overlaps rather than only the day it starts on.
-            windowFrom = new DateTimeOffset(day.Year, day.Month, day.Day, 0, 0, 0, TimeSpan.Zero);
-            windowTo = windowFrom.AddDays(1);
+            //
+            // The interval is the PROPERTY's day, not UTC's. It used to be UTC
+            // midnight to UTC midnight while /availability built its grid in
+            // the property's zone, so the two endpoints answered about
+            // different days and a property at a large positive offset lost
+            // its morning from the board while the grid still showed it.
+            var profile = await properties.FindAsync(ctx.TenantId, ctx.PropertyId, ct);
+            if (profile is null)
+                return Problem.From(ApiError.NotFound, ctx.CorrelationId, "This tenant has no such property.");
+
+            windowFrom = LocalClock.DayStartUtc(day, profile.TimeZoneId);
+            windowTo = LocalClock.DayStartUtc(day.AddDays(1), profile.TimeZoneId);
         }
         else
         {
@@ -88,22 +98,25 @@ public static class AppointmentEndpoints
             return Problem.From(ApiError.ValidationFailed, ctx.CorrelationId,
                 "Dates must fall between 2000 and 2100.");
 
-        var rows = await repo.ListOverlappingAsync(ctx.TenantId, ctx.PropertyId, windowFrom, windowTo, ct);
-
         var (pageOffset, pageLimit) = Guard.Page(offset, limit);
 
-        // Paged BEFORE projecting. Mapping every row first — each with a
-        // time-zone conversion — paid the full server-side cost the paging was
-        // introduced to avoid, and only trimmed the response.
-        var items = rows.Skip(pageOffset).Take(pageLimit).Select(AppointmentDto.From).ToList();
-        return Results.Json(new Page<AppointmentDto>(items, rows.Count, pageOffset, pageLimit), Json.Options);
+        // Paged in the STORE, not in memory. Fetching the whole window and
+        // slicing it afterwards paid the full server-side cost the paging was
+        // introduced to avoid and only trimmed the response.
+        var rows = await repo.ListPageAsync(
+            ctx.TenantId, ctx.PropertyId, windowFrom, windowTo, pageOffset, pageLimit, ct);
+        var total = await repo.CountOverlappingAsync(ctx.TenantId, ctx.PropertyId, windowFrom, windowTo, ct);
+
+        var items = rows.Select(AppointmentDto.From).ToList();
+        return Results.Json(new Page<AppointmentDto>(items, total, pageOffset, pageLimit), Json.Options);
     }
 
     /* -------------------------------- create ------------------------------- */
 
     private static async Task<IResult> Create(
         HttpContext http, IAppointmentRepository repo, IIdempotencyStore idem,
-        SchedulingService scheduling, IClock clock, ILoggerFactory loggers, CancellationToken ct)
+        SchedulingService scheduling, IServiceCatalog services, IClock clock,
+        ILoggerFactory loggers, CancellationToken ct)
     {
         var ctx = RequestContext.From(http);
         if (Guard.RequireScope(ctx, SpaScopes.Write) is { } denied) return denied;
@@ -115,12 +128,12 @@ public static class AppointmentEndpoints
 
         return await Idempotency.RunAsync(
             http, idem, ctx, logger, "appointments.create", body, clock.UtcNow,
-            () => CreateCore(http, repo, scheduling, clock, ctx, body, ct), ct);
+            () => CreateCore(http, repo, scheduling, services, ctx, body, ct), ct);
     }
 
     private static async Task<Idempotency.Outcome> CreateCore(
         HttpContext http, IAppointmentRepository repo, SchedulingService scheduling,
-        IClock clock, RequestContext ctx, string body, CancellationToken ct)
+        IServiceCatalog services, RequestContext ctx, string body, CancellationToken ct)
     {
         if (!Guard.TryParse<CreateAppointmentRequest>(body, ctx, out var req, out var parseFailure))
             return Idempotency.Refused(parseFailure!);
@@ -143,14 +156,6 @@ public static class AppointmentEndpoints
                 "One or more fields were not accepted.",
                 extensions: Problem.Ext("field_violations", violations)));
 
-        var catalog = ServiceCatalog.Find(req.ServiceId!);
-        if (catalog is null)
-            return Idempotency.Refused(Problem.From(ApiError.ValidationFailed, ctx.CorrelationId,
-                "Unknown serviceId.",
-                extensions: Problem.Ext(
-                    "field_violations", new[] { new { field = "serviceId", rule = "unknown_service" } },
-                    "known_services", ServiceCatalog.Services.Select(s => s.ServiceId).ToArray())));
-
         var confirmation = await NextConfirmationNumber(repo, ctx.TenantId, ct);
         if (confirmation is null)
             // Our own defect, not a dependency being slow. Labelling it
@@ -159,26 +164,43 @@ public static class AppointmentEndpoints
             return Idempotency.Refused(Problem.From(ApiError.InternalError, ctx.CorrelationId,
                 "Could not allocate a confirmation number."));
 
-        var profile = PropertyDirectory.For(ctx.PropertyId);
+        // The service's duration and the property's time zone are resolved by
+        // the domain service, which owns the reference data. An HTTP handler
+        // that looks them up to assemble an aggregate is a second place where
+        // the booking rules live.
+        var booking = new SchedulingService.NewBooking(
+            AppointmentId: "appt-" + Guid.NewGuid().ToString("n")[..10],
+            GuestId: req.GuestId!,
+            GuestAlias: req.GuestAlias!,
+            ServiceId: req.ServiceId!,
+            StartUtc: start,
+            ProviderId: req.ProviderId,
+            RoomId: req.RoomId,
+            ConfirmationNumber: confirmation,
+            CorrelationId: ctx.CorrelationId);
 
-        var candidate = Appointment.Create(
-            appointmentId: "appt-" + Guid.NewGuid().ToString("n")[..10],
-            tenantId: ctx.TenantId, propertyId: ctx.PropertyId, propertyTimeZone: profile.TimeZoneId,
-            guestId: req.GuestId!, guestAlias: req.GuestAlias!,
-            serviceId: catalog.ServiceId, serviceName: catalog.Name, durationMinutes: catalog.DurationMinutes,
-            providerId: req.ProviderId, roomId: req.RoomId,
-            startUtc: start, confirmationNumber: confirmation,
-            correlationId: ctx.CorrelationId, nowUtc: clock.UtcNow);
-
-        // Create runs the same conflict rules as a reassign, and evaluates and
-        // inserts under one gate. It previously did neither, so a booking a
-        // reassign would have refused could be typed straight into the board,
-        // and two concurrent creates into one room both succeeded.
+        // Create runs the same conflict rules as a reassign, inside one
+        // transaction. It previously did neither, so a booking a reassign
+        // would have refused could be typed straight into the board, and two
+        // concurrent creates into one room both succeeded.
         var result = await scheduling.CreateAsync(
-            ctx.TenantId, ctx.PropertyId, candidate, req.Reason, ctx.Actor, ctx.CorrelationId, ct);
+            ctx.TenantId, ctx.PropertyId, booking, req.Reason, ctx.Actor, ct);
 
         switch (result.Outcome)
         {
+            case SchedulingService.CreateOutcome.UnknownService:
+                return Idempotency.Refused(Problem.From(ApiError.ValidationFailed, ctx.CorrelationId,
+                    "Unknown serviceId.",
+                    extensions: Problem.Ext(
+                        "field_violations", new[] { new { field = "serviceId", rule = "unknown_service" } },
+                        "known_services", (await services.ListAsync(ctx.TenantId, ct)).Select(s => s.ServiceId).ToArray())));
+
+            case SchedulingService.CreateOutcome.UnknownProperty:
+                // The token named a property this tenant does not have. Not a
+                // 404 on the appointment: nothing was looked up yet.
+                return Idempotency.Refused(Problem.From(ApiError.ValidationFailed, ctx.CorrelationId,
+                    "This tenant has no such property."));
+
             case SchedulingService.CreateOutcome.HardConflict:
                 return Idempotency.Refused(Problem.From(ApiError.HardConflict, ctx.CorrelationId,
                     "This booking cannot be created as specified.",

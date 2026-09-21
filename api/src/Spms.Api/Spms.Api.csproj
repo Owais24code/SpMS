@@ -2,5 +2,11 @@
   <ItemGroup>
     <ProjectReference Include="..\Spms.Domain\Spms.Domain.csproj" />
     <ProjectReference Include="..\Spms.Infrastructure\Spms.Infrastructure.csproj" />
+    <ProjectReference Include="..\Spms.Infrastructure.Postgres\Spms.Infrastructure.Postgres.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.7" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
   </ItemGroup>
 </Project>

@@ -23,3 +23,6 @@ Thumbs.db
 
 # local preview build
 .preview/
+
+# offline NuGet feed — 30MB of binaries, rebuilt by api/tools/vendor-nuget.py
+api/vendor/

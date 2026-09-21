@@ -1,17 +1,16 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 
 namespace Spms.Api.Infrastructure;
 
 /// <summary>
-/// Per-request identity and correlation.
+/// Per-request identity and correlation, read from the authenticated
+/// principal.
 ///
-/// Header-supplied identity is a DEVELOPMENT affordance only and is gated by
-/// <see cref="DevHeaderAuth"/>. Outside Development the headers are ignored
-/// entirely: a build that trusted X-Spa-Scopes in production would let any
-/// caller mint themselves spa.admin with a curl flag.
-///
-/// Every call site asks this object rather than reading headers, so swapping
-/// in JWT claims from Entra ID changes only <see cref="Build"/>.
+/// It reads CLAIMS, not headers. Which scheme produced those claims — a real
+/// Entra ID bearer token or the Development header handler — is invisible
+/// here, so there is one code path to reason about and the production path is
+/// exercised by every test that runs in Development.
 /// </summary>
 public sealed record RequestContext(
     string TenantId,
@@ -24,13 +23,6 @@ public sealed record RequestContext(
     private const string ItemsKey = "spms.request-context";
 
     public bool Has(string scope) => Scopes.Contains(scope);
-
-    /// <summary>
-    /// Set once at startup from IHostEnvironment, before the server listens.
-    /// </summary>
-    public static bool DevHeaderAuth { get; private set; }
-
-    public static void EnableDevHeaderAuth() => DevHeaderAuth = true;
 
     /// <summary>
     /// Returns the request's context, building it once and caching it.
@@ -53,35 +45,50 @@ public sealed record RequestContext(
     private static RequestContext Build(HttpContext http)
     {
         var correlation = Sanitize(http.Request.Headers["X-Correlation-Id"].FirstOrDefault());
+        var user = http.User;
 
-        if (!DevHeaderAuth)
+        if (user?.Identity?.IsAuthenticated != true)
         {
-            // No JWT middleware is wired yet, so outside Development there is
-            // no way to establish identity. Answering 401 is the honest
-            // result; falling back to the demo tenant would be an open door.
             return new RequestContext(
                 TenantId: string.Empty, PropertyId: string.Empty, Actor: "anonymous",
                 CorrelationId: correlation, Scopes: new HashSet<string>(StringComparer.Ordinal),
                 Authenticated: false);
         }
 
-        var scopes = (http.Request.Headers["X-Spa-Scopes"].FirstOrDefault() ?? string.Empty)
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .ToHashSet(StringComparer.Ordinal);
+        // Entra ID delivers delegated permissions in `scp` as one
+        // space-separated string, and application permissions as repeated
+        // `roles` claims. Both are accepted so a daemon client and a signed-in
+        // operator reach the same authorization decision.
+        var scopes = new HashSet<string>(StringComparer.Ordinal);
 
-        // Whitespace, not just null: a present-but-empty X-Spa-Tenant used to
-        // yield TenantId "" and scope every read to a tenant that cannot exist.
-        var tenant = http.Request.Headers["X-Spa-Tenant"].FirstOrDefault();
-        var property = http.Request.Headers["X-Spa-Property"].FirstOrDefault();
-        var actor = http.Request.Headers["X-Spa-Actor"].FirstOrDefault();
+        foreach (var c in user.FindAll(SpmsAuth.Claims.Scope))
+            foreach (var s in c.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                scopes.Add(s);
+
+        foreach (var c in user.FindAll(SpmsAuth.Claims.Roles)) scopes.Add(c.Value.Trim());
+        foreach (var c in user.FindAll(ClaimTypes.Role)) scopes.Add(c.Value.Trim());
+
+        var tenant = user.FindFirst(SpmsAuth.Claims.TenantId)?.Value;
+        var property = user.FindFirst(SpmsAuth.Claims.PropertyId)?.Value;
+
+        // Property may legitimately arrive per request for an operator entitled
+        // to several, but only from the set the token grants. Until the claim
+        // carries a list, the claim alone decides — a header that could widen
+        // scope is the hole this replaces.
+        var actor = user.FindFirst("preferred_username")?.Value
+                    ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                    ?? user.FindFirst("oid")?.Value
+                    ?? "unknown";
 
         return new RequestContext(
-            TenantId: string.IsNullOrWhiteSpace(tenant) ? "tenant-demo" : tenant.Trim(),
-            PropertyId: string.IsNullOrWhiteSpace(property) ? "prop-riverside" : property.Trim(),
-            Actor: string.IsNullOrWhiteSpace(actor) ? "unknown" : actor.Trim(),
+            TenantId: string.IsNullOrWhiteSpace(tenant) ? string.Empty : tenant.Trim(),
+            PropertyId: string.IsNullOrWhiteSpace(property) ? string.Empty : property.Trim(),
+            Actor: actor.Trim(),
             CorrelationId: correlation,
             Scopes: scopes,
-            Authenticated: true);
+            // A token with no tenant or property claim cannot be scoped, so it
+            // is not usable identity however valid its signature.
+            Authenticated: !string.IsNullOrWhiteSpace(tenant) && !string.IsNullOrWhiteSpace(property));
     }
 
     /// <summary>
