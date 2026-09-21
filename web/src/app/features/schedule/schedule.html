@@ -81,14 +81,21 @@
         <div class="lane__track">
           @for (h of hours; track h) { <span class="lane__gridline"></span> }
 
-          @for (slot of lane.slots; track slot.label + slot.startPct) {
+          @for (slot of lane.slots; track slot.label + slot.startPct; let i = $index) {
             <button
               type="button"
               class="slot"
               [class]="'slot--' + slot.state"
-              [style.--start.%]="slot.startPct"
+              [class.is-moving]="moving()?.lane === lane.name && moving()?.index === i"
+              [style.--start.%]="moving()?.lane === lane.name && moving()?.index === i
+                                  ? moving()!.startPct : slot.startPct"
               [style.--len.%]="slot.widthPct"
+              [attr.aria-describedby]="'move-help'"
               (click)="onSlot(slot.state)"
+              (keydown.m)="startKeyboardMove(lane.name, i, slot.startPct)"
+              (keydown.arrowleft)="moving() && nudge(-2)"
+              (keydown.arrowright)="moving() && nudge(2)"
+              (keydown.enter)="moving() ? confirmMove() : null"
             >
               <span class="slot__label">{{ slot.label }}</span>
             </button>
@@ -99,6 +106,50 @@
   </div>
 
   }
+
+  <!-- When preflight finds a conflict the drawer takes over the decision;
+       showing both would offer two commit buttons for one action. -->
+  @if (moving(); as m) {
+    @if (!drawer()) {
+    <div class="movebar" role="status">
+      <span class="badge badge--info">Move mode</span>
+      <span>
+        Proposed start <strong class="numeric">{{ clockAt(m.startPct) }}</strong>
+        @if (preflightResult(); as pf) {
+          — {{ pf.proposedStart }} to {{ pf.proposedEnd }},
+          {{ pf.conflicts.length ? pf.conflicts.length + ' conflict' : 'no conflicts' }}
+        }
+      </span>
+      <span class="movebar__keys">
+        <kbd>←</kbd><kbd>→</kbd> shift · <kbd>Enter</kbd> {{ preflightResult() ? 'commit' : 'preview' }} · <kbd>Esc</kbd> cancel
+      </span>
+      <span class="row--end row">
+        <button type="button" class="btn btn--ghost" (click)="cancelMove()">Cancel</button>
+        <button type="button" class="btn btn--secondary" [disabled]="preflighting()" (click)="previewMove()">
+          {{ preflighting() ? 'Checking…' : 'Preview' }}
+        </button>
+        <button type="button" class="btn btn--primary" [disabled]="!preflightResult()?.commitAllowed" (click)="confirmMove()">
+          Commit
+        </button>
+      </span>
+    </div>
+    }
+  }
+
+  @if (store.canUndo()) {
+    <div class="undobar" role="status">
+      <span>Last move can still be reverted.</span>
+      <button type="button" class="btn btn--ghost" (click)="undo()">Undo</button>
+    </div>
+  }
+
+  <p id="move-help" class="subtle">
+    Press <kbd>M</kbd> on a focused appointment to move it with the keyboard.
+    Every path runs the same preflight — nothing commits until you confirm.
+  </p>
+
+  <!-- Move state is announced here; the board itself is visual only. -->
+  <p class="visually-hidden" role="status" aria-live="polite">{{ announcement() }}</p>
 
   <p class="legend">
     <span class="legend__key slot--booked"></span> Booked
@@ -187,7 +238,8 @@
         (click)="commit()"
       >
         {{ !c.overridable ? 'Cannot commit'
-           : committing() ? 'Committing…' : 'Override and commit' }}
+           : committing() ? 'Committing…'
+           : preflightResult() ? 'Override and move' : 'Override and commit' }}
       </button>
     </footer>
   </aside>

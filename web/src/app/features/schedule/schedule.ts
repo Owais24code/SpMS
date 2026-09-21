@@ -6,6 +6,7 @@ import { ToastService } from '../../core/services/toast.service';
 import { ConfirmService } from '../../core/services/confirm.service';
 import { HOURS } from '../../core/data/workspace-data';
 import { CONFLICTS, type ConflictDefinition } from '../../core/models/contract';
+import { UNDO_WINDOW_MS, type PreflightResult } from '../../core/models/preflight';
 
 
 type LaneFilter = 'all' | 'providers' | 'rooms';
@@ -33,6 +34,16 @@ export class Schedule {
   protected readonly reason = signal('');
   protected readonly committing = signal(false);
 
+  /* ---------------- keyboard move (GUI-004) ---------------- */
+
+  /** The slot currently being moved with the keyboard, if any. */
+  protected readonly moving = signal<{ lane: string; index: number; startPct: number } | null>(null);
+  protected readonly preflightResult = signal<PreflightResult | null>(null);
+  protected readonly preflighting = signal(false);
+
+  /** Announced through an aria-live region so the move is audible, not just visible. */
+  protected readonly announcement = signal('');
+
   protected readonly lanes = computed(() => {
     const f = this.laneFilter();
     return this.store.lanes().filter((l) =>
@@ -49,11 +60,113 @@ export class Schedule {
 
   @HostListener('document:keydown.escape')
   protected onEscape(): void {
-    if (this.drawer()) this.close();
+    if (this.drawer()) { this.close(); return; }
+    if (this.moving()) this.cancelMove();
   }
 
   protected openSoft(): void { this.reason.set(''); this.drawer.set(CONFLICTS['CON-001']); }
   protected openHard(): void { this.reason.set(''); this.drawer.set(CONFLICTS['CON-002']); }
+
+  /**
+   * Enters keyboard move mode. Parity with drag is a spec requirement, not a
+   * nicety: the board is a primary surface and dragging is unusable with a
+   * keyboard or a screen reader.
+   */
+  protected startKeyboardMove(laneName: string, index: number, startPct: number): void {
+    this.moving.set({ lane: laneName, index, startPct });
+    this.announce(`Moving. Arrow keys shift the appointment, Enter previews the change, Escape cancels.`);
+  }
+
+  protected nudge(by: number): void {
+    const m = this.moving();
+    if (!m) return;
+    const next = Math.max(0, Math.min(94, m.startPct + by));
+    this.moving.set({ ...m, startPct: next });
+    this.announce(`Proposed start ${this.clockAt(next)}.`);
+  }
+
+  protected cancelMove(): void {
+    if (!this.moving()) return;
+    this.moving.set(null);
+    this.preflightResult.set(null);
+    this.store.discardProposal();
+    this.announce('Move cancelled. Nothing changed.');
+  }
+
+  /** Builds a proposal and asks the server to validate it. Commits nothing. */
+  protected async previewMove(): Promise<void> {
+    const m = this.moving();
+    if (!m) return;
+
+    this.preflighting.set(true);
+    const res = await this.store.preflight({
+      appointmentId: this.store.appointments()[0]?.id ?? 'a-4821',
+      laneName: m.lane,
+      startPct: m.startPct,
+      widthPct: 20,
+      fromVersion: this.store.appointments()[0]?.version ?? 'v1',
+    });
+    this.preflighting.set(false);
+    this.preflightResult.set(res);
+
+    if (res.conflicts.length === 0) {
+      this.announce(`No conflicts. ${res.proposedStart} to ${res.proposedEnd}. Press Enter again to commit.`);
+    } else {
+      const c = res.conflicts[0];
+      this.announce(`${res.conflicts.length} conflict. ${c.summary}. ${c.overridable ? 'Override permitted with a reason.' : 'Not overridable.'}`);
+      this.drawer.set(c);
+    }
+  }
+
+  /** Second Enter: commit against the token from the preview. */
+  protected async confirmMove(): Promise<void> {
+    const res = this.preflightResult();
+    if (!res) { await this.previewMove(); return; }
+
+    this.committing.set(true);
+    const out = await this.store.commitMove(res.token, this.reason().trim() || undefined);
+    this.committing.set(false);
+
+    if (out.kind === 'committed') {
+      this.moving.set(null);
+      this.preflightResult.set(null);
+      this.close();
+      this.announce('Move committed.');
+      this.toast.success('Appointment moved', `${res.proposedStart}–${res.proposedEnd}.`,
+        () => this.undo());
+    } else {
+      this.announce('That did not commit.');
+      this.toast.error('Preflight no longer valid',
+        'The board changed while you were deciding. Review it and try the move again.',
+        out.code);
+      this.preflightResult.set(null);
+      this.store.discardProposal();
+    }
+  }
+
+  /** CON-006: revert inside the window, compensating reschedule after it. */
+  protected undo(): void {
+    const outcome = this.store.undoLastMove();
+    if (outcome === 'undone') {
+      this.toast.success('Move reverted', 'The board is back as it was.');
+      this.announce('Move reverted.');
+    } else {
+      this.toast.warn('Undo window has closed',
+        `Undo is available for ${UNDO_WINDOW_MS / 1000} seconds. Book a compensating reschedule instead so the guest is told.`);
+    }
+  }
+
+  protected clockAt(pct: number): string {
+    const m = Math.round(9 * 60 + (pct / 100) * 8 * 60);
+    const h24 = Math.floor(m / 60);
+    const mm = String(m % 60).padStart(2, '0');
+    const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+    return `${h12}:${mm}${h24 < 12 ? 'am' : 'pm'}`;
+  }
+
+  private announce(msg: string): void {
+    this.announcement.set(msg);
+  }
 
   protected onSlot(state: string): void {
     if (state === 'conflict') this.openSoft();
@@ -72,12 +185,17 @@ export class Schedule {
     if (!this.canCommit()) return;
     this.committing.set(true);
 
+    const pf = this.preflightResult();
+    if (pf) { this.committing.set(false); await this.confirmMove(); return; }
+
     const conflicted = this.store.appointments().find((a) => a.state === 'conflict');
     const res = await this.store.resolveConflict(conflicted?.id ?? 'a-4824', this.reason().trim());
     this.committing.set(false);
 
     if (res.kind === 'committed') {
-      this.toast.success('Override recorded', 'The appointment is booked and your reason is on the audit trail.');
+      this.toast.success('Override recorded',
+        'The appointment is booked and your reason is on the audit trail.',
+        () => this.undo());
       this.close();
     } else {
       this.toast.error('That did not commit', 'Your reason is still here — try again.', res.code);

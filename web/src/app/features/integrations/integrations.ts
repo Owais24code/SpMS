@@ -145,7 +145,7 @@ export class Integrations {
   protected readonly store = inject(WorkspaceStore);
 
   protected readonly owners = computed(() => this.store.owners());
-  protected readonly preflight = computed(() => this.store.preflight());
+  protected readonly preflight = computed(() => this.store.ownershipPreflight());
 
   protected readonly checks = computed(() => {
     const failed = this.preflight() === 'fail';

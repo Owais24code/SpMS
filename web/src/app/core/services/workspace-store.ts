@@ -7,7 +7,11 @@ import {
   APPOINTMENTS, ARRIVALS, DEVICES, LEDGER, MESSAGE_RULES,
   OWNERS, STAFF, STOCK, LANES, WEEK_BOOKINGS, WEEK_LABELS,
 } from '../data/workspace-data';
-import { API_ERROR } from '../models/contract';
+import { API_ERROR, CONFLICTS, type ConflictDefinition } from '../models/contract';
+import {
+  PREFLIGHT_TTL_MS, UNDO_WINDOW_MS, isExpired,
+  type MoveProposal, type PreflightResult,
+} from '../models/preflight';
 
 export interface AuditEntry {
   readonly at: string;
@@ -137,6 +141,129 @@ export class WorkspaceStore {
     return row;
   }
 
+  // ---- preflight and commit (SCH-020) -----------------------------------
+
+  /** Tokens we have issued and not yet spent. Server-side in production. */
+  private readonly issued = new Map<string, PreflightResult>();
+
+  /** The proposal currently on screen, if any. Nothing is committed yet. */
+  readonly pendingProposal = signal<PreflightResult | null>(null);
+
+  /**
+   * Validates a proposed move against the complete post-change state and
+   * returns a token. Nothing is written — the appointment is untouched until
+   * commitMove quotes this token.
+   */
+  async preflight(proposal: MoveProposal): Promise<PreflightResult> {
+    await this.settle(320);
+
+    const lane = this.lanes().find((l) => l.name === proposal.laneName);
+    const conflicts: ConflictDefinition[] = [];
+
+    // A room already occupied in the target window is physically impossible.
+    const overlaps = lane?.slots.some((s) =>
+      s.state !== 'turnover' &&
+      proposal.startPct < s.startPct + s.widthPct &&
+      s.startPct < proposal.startPct + proposal.widthPct);
+
+    if (overlaps) {
+      conflicts.push(lane?.role === 'Room' ? CONFLICTS['CON-002'] : CONFLICTS['CON-001']);
+    }
+    if (lane?.slots.some((s) => s.state === 'blocked')) {
+      conflicts.push(CONFLICTS['CON-004']);
+    }
+
+    const appt = this.appointments().find((a) => a.id === proposal.appointmentId);
+    const startMin = Math.round(9 * 60 + (proposal.startPct / 100) * 8 * 60);
+    const endMin = startMin + (appt?.durationMin ?? 60);
+
+    const result: PreflightResult = {
+      token: 'pf_' + Math.random().toString(36).slice(2, 10),
+      expiresAtMs: Date.now() + PREFLIGHT_TTL_MS,
+      proposal,
+      proposedStart: fmtMin(startMin),
+      proposedEnd: fmtMin(endMin),
+      conflicts,
+      commitAllowed: conflicts.every((c) => c.overridable),
+    };
+
+    this.issued.set(result.token, result);
+    this.pendingProposal.set(result);
+    return result;
+  }
+
+  discardProposal(): void {
+    const p = this.pendingProposal();
+    if (p) this.issued.delete(p.token);
+    this.pendingProposal.set(null);
+  }
+
+  /**
+   * Commits a previously preflighted move.
+   *
+   * Refuses an unknown or expired token rather than silently re-validating —
+   * a stale token means the board has moved under the operator and they need
+   * to see the new state before committing to it.
+   */
+  async commitMove(token: string, reason?: string): Promise<WriteResult<string>> {
+    await this.settle();
+
+    const pf = this.issued.get(token);
+    if (!pf || isExpired(pf)) {
+      this.issued.delete(token);
+      this.pendingProposal.set(null);
+      return { kind: 'denied', code: API_ERROR.authorizationDenied.code };
+    }
+    if (!pf.commitAllowed) {
+      return { kind: 'denied', code: API_ERROR.authorizationDenied.code };
+    }
+
+    const before = this.lanes().map((l) => ({ ...l, slots: [...l.slots] }));
+    this.undoable.set({ lanes: before, at: Date.now(), what: 'Move committed' });
+
+    this.lanes.update((ls) => ls.map((l) => l.name !== pf.proposal.laneName ? l : {
+      ...l,
+      slots: [...l.slots, {
+        label: 'Moved', startPct: pf.proposal.startPct,
+        widthPct: pf.proposal.widthPct, state: 'booked' as const,
+      }],
+    }));
+
+    this.issued.delete(token);
+    this.pendingProposal.set(null);
+    this.record('Move committed', `${pf.proposedStart}–${pf.proposedEnd}${reason ? ' — ' + reason : ''}`,
+      pf.conflicts[0]?.code);
+
+    return { kind: 'committed', value: token };
+  }
+
+  // ---- undo (CON-006) ---------------------------------------------------
+
+  private readonly undoable = signal<{ lanes: Lane[]; at: number; what: string } | null>(null);
+
+  readonly canUndo = computed(() => {
+    const u = this.undoable();
+    return !!u && Date.now() - u.at < UNDO_WINDOW_MS;
+  });
+
+  /**
+   * Reverts inside the window. Past it the spec requires an explicit
+   * compensating reschedule instead, because downstream systems may already
+   * have acted on the change.
+   */
+  undoLastMove(): 'undone' | 'window-closed' {
+    const u = this.undoable();
+    if (!u) return 'window-closed';
+    if (Date.now() - u.at >= UNDO_WINDOW_MS) {
+      this.undoable.set(null);
+      return 'window-closed';
+    }
+    this.lanes.set(u.lanes);
+    this.undoable.set(null);
+    this.record('Move undone', u.what);
+    return 'undone';
+  }
+
   // ---- appointments -----------------------------------------------------
   async resolveConflict(id: string, reason: string): Promise<WriteResult<Appointment>> {
     await this.settle();
@@ -257,13 +384,14 @@ export class WorkspaceStore {
   }
 
   // ---- ownership --------------------------------------------------------
-  readonly preflight = signal<'idle' | 'running' | 'pass' | 'fail'>('idle');
+  /** Ownership-cutover preflight (UX-010), distinct from schedule preflight. */
+  readonly ownershipPreflight = signal<'idle' | 'running' | 'pass' | 'fail'>('idle');
 
   async runPreflight(): Promise<'pass' | 'fail'> {
-    this.preflight.set('running');
+    this.ownershipPreflight.set('running');
     await this.settle(1100);
     const outcome = this.owners().some((o) => o.state === 'awaiting-approval') ? 'fail' : 'pass';
-    this.preflight.set(outcome);
+    this.ownershipPreflight.set(outcome);
     this.record('Preflight run', outcome === 'pass' ? 'All checks passed' : 'Outage runbook missing');
     return outcome;
   }
@@ -293,9 +421,17 @@ export class WorkspaceStore {
     this.staff.set([...STAFF]);
     this.lanes.set(LANES.map((l) => ({ ...l, slots: [...l.slots] })));
     this.checkedIn.set([]);
-    this.preflight.set('idle');
+    this.ownershipPreflight.set('idle');
     this.record('Demo data reset', 'All screens returned to their starting state');
   }
 }
 
 const bump = (v: string) => 'v' + (Number(v.replace('v', '')) + 1);
+
+/** Minutes since midnight → property-local clock label. */
+const fmtMin = (m: number): string => {
+  const h24 = Math.floor(m / 60);
+  const mm = String(m % 60).padStart(2, '0');
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${h12}:${mm}${h24 < 12 ? 'am' : 'pm'}`;
+};

@@ -357,3 +357,57 @@ textarea {
   color: var(--status-info-fg);
   font-weight: var(--weight-bold);
 }
+
+/* ------------------- keyboard move (GUI-004) ------------------- */
+.slot.is-moving {
+  outline: 2px dashed var(--focus-ring);
+  outline-offset: 2px;
+  opacity: 0.9;
+  z-index: 3;
+}
+
+.movebar,
+.undobar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+}
+
+.movebar {
+  border: 1px solid var(--status-info-br);
+  background: var(--status-info-bg);
+  color: var(--status-info-fg);
+}
+
+.undobar {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+}
+
+.movebar__keys {
+  font-size: var(--text-xs);
+  opacity: 0.85;
+
+  kbd {
+    font-family: var(--font-numeric);
+    font-size: var(--text-2xs);
+    border: 1px solid currentColor;
+    border-radius: var(--radius-sm);
+    padding: 0 4px;
+    margin-inline: 2px;
+    opacity: 0.8;
+  }
+}
+
+kbd {
+  font-family: var(--font-numeric);
+  font-size: var(--text-2xs);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+}
