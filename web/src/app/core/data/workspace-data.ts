@@ -6,33 +6,47 @@ import type {
 /** Placeholder data so every screen renders with realistic shape and density.
  *  Replace with API calls — the view models are already the API contract. */
 
+/**
+ * The seeded board.
+ *
+ * `appointmentId` links a slot to a row in APPOINTMENTS below. Only the slots
+ * that ARE appointments carry one: a turnover or maintenance block is not a
+ * booking, and the ones left unlinked are filler that gives the board
+ * realistic density. A slot with no id cannot be moved — the board refuses
+ * rather than proposing an arbitrary record, which is how every preview came
+ * to quote the wrong version.
+ *
+ * a-4825 appears twice on purpose: it occupies both Lena's lane and Suite 2,
+ * exactly as an appointment with a provider and a room does against the API.
+ */
 export const LANES: readonly Lane[] = [
   { name: 'Lena Kovač', role: 'Therapist', slots: [
-    { label: 'Aromatherapy 60',  startPct: 6,  widthPct: 20, state: 'complete' },
-    { label: 'Deep tissue 90',   startPct: 30, widthPct: 28, state: 'in-progress' },
+    { label: 'Aromatherapy 60',  startPct: 6,  widthPct: 20, state: 'complete',    appointmentId: 'a-4825' },
+    { label: 'Deep tissue 90',   startPct: 30, widthPct: 28, state: 'in-progress', appointmentId: 'a-4821' },
     { label: 'Hot stone 60',     startPct: 64, widthPct: 20, state: 'booked' },
   ]},
   { name: 'Marco Ruiz', role: 'Therapist', slots: [
-    { label: 'Swedish 60',       startPct: 10, widthPct: 20, state: 'complete' },
-    { label: 'Double booked',    startPct: 38, widthPct: 24, state: 'conflict' },
+    { label: 'Swedish 60',       startPct: 10, widthPct: 20, state: 'complete',    appointmentId: 'a-4826' },
+    { label: 'Double booked',    startPct: 38, widthPct: 24, state: 'conflict',    appointmentId: 'a-4824' },
     { label: 'Facial 45',        startPct: 70, widthPct: 16, state: 'booked' },
   ]},
   { name: 'Priya Nair', role: 'Esthetician', slots: [
-    { label: 'Facial 45',        startPct: 4,  widthPct: 15, state: 'complete' },
+    { label: 'Facial 45',        startPct: 4,  widthPct: 15, state: 'complete',    appointmentId: 'a-4822' },
     { label: 'Peel 30',          startPct: 24, widthPct: 11, state: 'complete' },
     { label: 'Facial 60',        startPct: 44, widthPct: 20, state: 'booked' },
   ]},
   { name: 'Suite 1', role: 'Room', slots: [
     { label: 'Turnover',         startPct: 8,  widthPct: 10, state: 'turnover' },
-    { label: 'Couples 90',       startPct: 22, widthPct: 30, state: 'booked' },
+    { label: 'Couples 90',       startPct: 22, widthPct: 30, state: 'booked',      appointmentId: 'a-4823' },
     { label: 'Turnover',         startPct: 54, widthPct: 10, state: 'turnover' },
   ]},
   { name: 'Suite 2', role: 'Room', slots: [
     { label: 'Maintenance',      startPct: 0,  widthPct: 34, state: 'blocked' },
-    { label: 'Aromatherapy 60',  startPct: 40, widthPct: 22, state: 'booked' },
+    { label: 'Aromatherapy 60',  startPct: 40, widthPct: 22, state: 'booked',      appointmentId: 'a-4825' },
   ]},
 ];
 
+/** The demo board's hour scale. The real one is derived from the API's day. */
 export const HOURS = ['9a', '10a', '11a', '12p', '1p', '2p', '3p', '4p', '5p'];
 
 export const ACTIVE_CONFLICT: Conflict = {

@@ -66,7 +66,7 @@ export const FAQ_ITEMS: readonly FaqItem[] = [
   },
   {
     q: 'What accessibility standard does SpMS meet?',
-    a: 'WCAG 2.2 AA is the target across desktop, tablet, phone and kiosk. Every drag interaction on the scheduling board has a keyboard equivalent, and critical journeys carry manual screen-reader evidence against browser and screen-reader combinations approved for each release.',
+    a: 'WCAG 2.2 AA is the target across desktop, tablet, phone and kiosk. The scheduling board is operated from the keyboard, and critical journeys carry manual screen-reader evidence against browser and screen-reader combinations approved for each release.',
   },
   {
     q: 'How are configuration changes to a live property controlled?',

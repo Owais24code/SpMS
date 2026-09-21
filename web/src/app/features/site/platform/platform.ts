@@ -140,7 +140,7 @@ export class Platform {
   ];
 
   protected readonly surfaces = [
-    { name: 'Staff desktop',  who: 'Scheduler, front desk', copy: 'Board, arrivals, inventory and reports. Keyboard equivalents for every drag action.' },
+    { name: 'Staff desktop',  who: 'Scheduler, front desk', copy: 'Board, arrivals, inventory and reports. The board is operated from the keyboard throughout.' },
     { name: 'Provider tablet', who: 'Therapists',            copy: 'Installable, works offline, queues status changes in order and never double-posts.' },
     { name: 'Guest web',       who: 'Members and visitors',  copy: 'Booking, changes and cancellation with the policy effects shown before confirming.' },
     { name: 'Kiosk',           who: 'Self-service arrival',  copy: 'Locked-down profile that purges abandoned data rather than preserving it.' },

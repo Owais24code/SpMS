@@ -16,11 +16,28 @@ export interface Appointment {
   readonly version: string;
 }
 
+/**
+ * One drawn block on a lane.
+ *
+ * The identity fields below are what a Move proposal is built from. They are
+ * optional only because a turnover or maintenance block is not an appointment;
+ * a slot without an `appointmentId` cannot be moved, and the board refuses
+ * rather than proposing some other record's id — which is exactly the defect
+ * that made every preview quote the wrong version.
+ */
 export interface LaneSlot {
   readonly label: string;
   readonly startPct: number;
   readonly widthPct: number;
   readonly state: SlotState;
+  readonly appointmentId?: string;
+  /** ISO-8601 instant. The board's percentage is derived from this, not vice versa. */
+  readonly startUtc?: string;
+  readonly providerId?: string | null;
+  readonly roomId?: string | null;
+  /** Numeric row version, as preflight's fromRowVersion and If-Match require. */
+  readonly rowVersion?: number;
+  readonly durationMinutes?: number;
 }
 
 export interface Lane {

@@ -1,17 +1,28 @@
-import { Injectable, signal, computed } from '@angular/core';
+import { Injectable, computed, inject, signal } from '@angular/core';
 import type {
-  Appointment, ArrivalRow, DeviceRow, LedgerRow,
-  MessageRule, OwnerRow, StaffRow, StockLine, Lane,
+  Appointment, ArrivalRow, DeviceRow, LaneSlot, LedgerRow,
+  MessageRule, OwnerRow, SlotState, StaffRow, StockLine, Lane,
 } from '../models/spa.model';
 import {
-  APPOINTMENTS, ARRIVALS, DEVICES, LEDGER, MESSAGE_RULES,
+  APPOINTMENTS, ARRIVALS, DEVICES, HOURS, LEDGER, MESSAGE_RULES,
   OWNERS, STAFF, STOCK, LANES, WEEK_BOOKINGS, WEEK_LABELS,
 } from '../data/workspace-data';
 import { API_ERROR, CONFLICTS, type ConflictDefinition } from '../models/contract';
 import {
-  PREFLIGHT_TTL_MS, UNDO_WINDOW_MS, isExpired,
-  type MoveProposal, type PreflightResult,
+  PREFLIGHT_TTL_MS, UNDO_WINDOW_MS, isExpired, toConflictView,
+  type CommitMoveResult, type ConflictView, type MoveProposal, type PreflightResult,
 } from '../models/preflight';
+import type {
+  AppointmentDto, AvailabilityDto, CatalogServiceDto, ConflictDto, PreflightResponseDto,
+} from '../models/api';
+import type { ApiProblem } from '../models/api-problem';
+import { IdempotencyKeys, SchedulingApi } from '../api/scheduling-api';
+import {
+  browserToday, clockLabel, dayFromAvailability, fallbackDay, hourTicks,
+  pctAt, pctForMinutes, spanning, type BusinessDay,
+} from './board-time';
+import { environment } from '../../../environments/environment';
+import { AuthService } from './auth.service';
 
 export interface AuditEntry {
   readonly at: string;
@@ -32,17 +43,26 @@ const now = () =>
   new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' }).format(new Date());
 
 /**
- * In-memory stand-in for the SpMS API.
+ * The workspace's single source of truth.
  *
- * Every mutation goes through here rather than a component touching an array,
- * so when the real API lands only this file changes. Latency and the occasional
- * stale/ambiguous outcome are simulated deliberately: the non-happy paths are
- * the ones that are expensive to retrofit, so they are exercised from day one.
+ * The schedule reads and writes through the real API; every other screen is
+ * still the in-memory stand-in, behind `environment.useRealApi`. Both paths
+ * live here because the components must not know which one they are on — the
+ * public members below have the same shape either way.
+ *
+ * The flag is not a migration artefact to be tidied away: the API has no
+ * database, so a demo with no server running is still how most of these
+ * screens are shown.
  */
 @Injectable({ providedIn: 'root' })
 export class WorkspaceStore {
+  private readonly api  = inject(SchedulingApi);
+  private readonly keys = inject(IdempotencyKeys);
+
+  /** Read once. A flag that could change mid-session would be untestable. */
+  private readonly realApi = environment.useRealApi;
+
   // ---- collections ------------------------------------------------------
-  readonly appointments = signal<Appointment[]>([...APPOINTMENTS]);
   readonly arrivals     = signal<ArrivalRow[]>([...ARRIVALS]);
   readonly devices      = signal<DeviceRow[]>([...DEVICES]);
   readonly stock        = signal<StockLine[]>([...STOCK]);
@@ -50,10 +70,61 @@ export class WorkspaceStore {
   readonly rules        = signal<MessageRule[]>([...MESSAGE_RULES]);
   readonly owners       = signal<OwnerRow[]>([...OWNERS]);
   readonly staff        = signal<StaffRow[]>([...STAFF]);
-  readonly lanes        = signal<Lane[]>(LANES.map((l) => ({ ...l, slots: [...l.slots] })));
 
   readonly checkedIn = signal<readonly string[]>([]);
   readonly audit     = signal<readonly AuditEntry[]>([]);
+
+  /* ---- the board -------------------------------------------------------
+     The demo collections stay writable; the API ones are replaced wholesale
+     from a response. `appointments` and `lanes` are computed over whichever
+     is live, so the four screens that read them are unaware of the switch. */
+
+  private readonly demoAppointments = signal<Appointment[]>([...APPOINTMENTS]);
+  private readonly demoLanes = signal<Lane[]>(LANES.map((l) => ({ ...l, slots: [...l.slots] })));
+
+  /** The server's appointments for `boardDate`, exactly as they arrived. */
+  readonly boardRows = signal<readonly AppointmentDto[]>([]);
+  readonly services = signal<readonly CatalogServiceDto[]>([]);
+
+  /** `yyyy-MM-dd` in the property's zone. */
+  readonly boardDate = signal<string>(browserToday());
+  readonly boardLoading = signal(false);
+  /** The last read failure, so the board can say why it is empty. */
+  readonly boardProblem = signal<ApiProblem | null>(null);
+
+  /**
+   * The business day the board is drawn across.
+   *
+   * Starts as an assumed window in UTC and is replaced by the derived one as
+   * soon as /availability answers. It is a signal rather than a constant
+   * because it changes with the date AND with the property.
+   */
+  readonly businessDay = signal<BusinessDay>(fallbackDay(browserToday(), 'UTC'));
+
+  readonly appointments = computed<readonly Appointment[]>(() => {
+    if (!this.realApi) return this.demoAppointments();
+    const day = this.businessDay();
+    return this.boardRows().map((a) => toViewAppointment(day, a));
+  });
+
+  readonly lanes = computed<readonly Lane[]>(() =>
+    this.realApi ? buildLanes(this.businessDay(), this.boardRows()) : this.demoLanes());
+
+  /** The hour scale. Derived from the real business day, not a fixed array. */
+  readonly hours = computed<readonly string[]>(() =>
+    this.realApi ? hourTicks(this.businessDay()) : HOURS);
+
+  constructor() {
+    // Fired here rather than from the schedule component because the
+    // dashboard, appointments and treatments screens read `appointments()`
+    // too, and each of them would otherwise render an empty state until
+    // somebody visited the board.
+    //
+    // Gated on a principal existing: every scoped endpoint answers 403 with no
+    // scopes, and a read fired from the sign-in screen would leave a stale
+    // authorization failure on the board for the session that follows.
+    if (this.realApi && inject(AuthService).isSignedIn()) void this.loadBoard();
+  }
 
   // ---- chart ranges -----------------------------------------------------
   readonly range = signal<'7' | '30'>('7');
@@ -141,6 +212,96 @@ export class WorkspaceStore {
     return row;
   }
 
+  // ---- the board (real API) ---------------------------------------------
+
+  /**
+   * Reads one property-local day and derives the board from it.
+   *
+   * Availability is read FIRST, and not in parallel, because it is the only
+   * endpoint that publishes the property's time zone — and the appointment
+   * window cannot be stated correctly without it. The two endpoints interpret
+   * `date` differently: /availability builds its grid in the property's zone,
+   * while /appointments?date= builds the interval from UTC midnight. For a
+   * property east of UTC+12 those are different days, and the board would lose
+   * its whole morning. So the zone comes from availability and the
+   * appointments are asked for by an explicit from/to instead.
+   *
+   * Availability's own failure is swallowed: a 422 on the grid must not leave
+   * the operator with no appointments at all.
+   */
+  async loadBoard(date = this.boardDate()): Promise<void> {
+    if (!this.realApi) return;
+
+    this.boardLoading.set(true);
+    this.boardProblem.set(null);
+    try {
+      const availability = await this.api.availability(date)
+        .catch((): AvailabilityDto | null => null);
+
+      const page = availability === null
+        // No zone to reason with, so fall back to the server's own
+        // interpretation of the date rather than inventing a window.
+        ? await this.api.appointments({ date, limit: BOARD_PAGE_LIMIT })
+        : await this.api.appointments({
+            ...localDayWindow(date, availability.timeZone),
+            limit: BOARD_PAGE_LIMIT,
+          });
+
+      this.boardDate.set(date);
+      this.boardRows.set(page.items);
+
+      const zone = availability?.timeZone ?? page.items[0]?.propertyTimeZone ?? 'UTC';
+      const published = availability === null
+        ? fallbackDay(date, zone)
+        : dayFromAvailability(availability);
+
+      // Widened to cover anything outside opening hours. An appointment drawn
+      // at a negative percentage is invisible, which reads as "it is gone".
+      this.businessDay.set(
+        spanning(published, page.items.flatMap((a) => [a.startUtc, a.endUtc])));
+
+      if (page.total > page.items.length) {
+        this.record('Board truncated',
+          `${page.items.length} of ${page.total} appointments shown for ${date}`);
+      }
+    } catch (err) {
+      this.boardProblem.set(err as ApiProblem);
+    } finally {
+      this.boardLoading.set(false);
+    }
+  }
+
+  /** The service catalogue, for the booking and availability screens. */
+  async loadServices(): Promise<void> {
+    if (!this.realApi || this.services().length > 0) return;
+    try {
+      this.services.set(await this.api.services());
+    } catch (err) {
+      this.boardProblem.set(err as ApiProblem);
+    }
+  }
+
+  /** The appointment behind a drawn slot, or null for a turnover block. */
+  rowFor(appointmentId: string): AppointmentDto | null {
+    return this.boardRows().find((a) => a.appointmentId === appointmentId) ?? null;
+  }
+
+  /**
+   * The numeric version a proposal must assert, or null when the board does
+   * not know it.
+   *
+   * Null is a refusal, not a zero: `fromRowVersion` is required and asserting
+   * a guessed value either fails the optimistic check or, worse, passes it
+   * against a record the operator never looked at.
+   */
+  rowVersionFor(appointmentId: string): number | null {
+    if (this.realApi) return this.rowFor(appointmentId)?.rowVersion ?? null;
+    const demo = this.demoAppointments().find((a) => a.id === appointmentId);
+    if (demo === undefined) return null;
+    const n = Number(demo.version.replace('v', ''));
+    return Number.isFinite(n) ? n : null;
+  }
+
   // ---- preflight and commit (SCH-020) -----------------------------------
 
   /** Tokens we have issued and not yet spent. Server-side in production. */
@@ -153,40 +314,24 @@ export class WorkspaceStore {
    * Validates a proposed move against the complete post-change state and
    * returns a token. Nothing is written — the appointment is untouched until
    * commitMove quotes this token.
+   *
+   * Rejects with an ApiProblem rather than returning a union: the only failure
+   * the operator can act on differently is STALE_VERSION, which arrives with
+   * the current record attached, and the caller has to handle a thrown problem
+   * for the network cases anyway.
    */
   async preflight(proposal: MoveProposal): Promise<PreflightResult> {
-    await this.settle(320);
+    if (!this.realApi) return this.preflightInMemory(proposal);
 
-    const lane = this.lanes().find((l) => l.name === proposal.laneName);
-    const conflicts: ConflictDefinition[] = [];
+    const res = await this.api.preflight({
+      appointmentId: proposal.appointmentId,
+      startUtc: proposal.startUtc,
+      providerId: proposal.providerId,
+      roomId: proposal.roomId,
+      fromRowVersion: proposal.fromRowVersion,
+    });
 
-    // A room already occupied in the target window is physically impossible.
-    const overlaps = lane?.slots.some((s) =>
-      s.state !== 'turnover' &&
-      proposal.startPct < s.startPct + s.widthPct &&
-      s.startPct < proposal.startPct + proposal.widthPct);
-
-    if (overlaps) {
-      conflicts.push(lane?.role === 'Room' ? CONFLICTS['CON-002'] : CONFLICTS['CON-001']);
-    }
-    if (lane?.slots.some((s) => s.state === 'blocked')) {
-      conflicts.push(CONFLICTS['CON-004']);
-    }
-
-    const appt = this.appointments().find((a) => a.id === proposal.appointmentId);
-    const startMin = Math.round(9 * 60 + (proposal.startPct / 100) * 8 * 60);
-    const endMin = startMin + (appt?.durationMin ?? 60);
-
-    const result: PreflightResult = {
-      token: 'pf_' + Math.random().toString(36).slice(2, 10),
-      expiresAtMs: Date.now() + PREFLIGHT_TTL_MS,
-      proposal,
-      proposedStart: fmtMin(startMin),
-      proposedEnd: fmtMin(endMin),
-      conflicts,
-      commitAllowed: conflicts.every((c) => c.overridable),
-    };
-
+    const result = this.fromPreflightResponse(res, proposal);
     this.issued.set(result.token, result);
     this.pendingProposal.set(result);
     return result;
@@ -201,47 +346,265 @@ export class WorkspaceStore {
   /**
    * Commits a previously preflighted move.
    *
-   * Refuses an unknown or expired token rather than silently re-validating —
-   * a stale token means the board has moved under the operator and they need
-   * to see the new state before committing to it.
+   * The server owns the move. Nothing here edits a lane: on success the day is
+   * re-read and the board re-renders from the response. It used to APPEND a
+   * slot labelled "Moved" and leave the original in place, so every commit
+   * drew the same appointment twice and the second copy had no identity.
    */
-  async commitMove(token: string, reason?: string): Promise<WriteResult<string>> {
+  async commitMove(token: string, reason?: string): Promise<CommitMoveResult> {
+    if (!this.realApi) return this.commitMoveInMemory(token, reason);
+
+    const pf = this.issued.get(token);
+    if (!pf) return { kind: 'expired' };
+
+    const id = pf.proposal.appointmentId;
+
+    // The reason is part of the identity because the server hashes method,
+    // path AND body. Reusing the key after the operator types a reason would
+    // answer IDEMPOTENCY_MISMATCH; minting a new key for a bare retry of the
+    // SAME body would defeat the replay. Both halves matter.
+    const attempt = `reassign|${id}|${token}|${reason ?? ''}`;
+    const key = this.keys.keyFor(attempt);
+
+    try {
+      const appointment = await this.api.reassign(
+        id, { token, reason: reason ?? null }, key);
+
+      this.keys.forget(attempt);
+      this.issued.delete(token);
+      this.pendingProposal.set(null);
+      this.record('Move committed',
+        `${pf.proposedStart}–${pf.proposedEnd}${reason ? ' — ' + reason : ''}`,
+        pf.conflicts[0]?.code);
+
+      await this.loadBoard();
+      return { kind: 'committed', appointment };
+    } catch (err) {
+      return this.interpretCommitFailure(err as ApiProblem, token, attempt);
+    }
+  }
+
+  /**
+   * Turns a refused commit into something the operator can act on.
+   *
+   * Each branch exists because the required behaviour differs: one keeps the
+   * token, one destroys it, one has no override path at all. Collapsing them
+   * into a single "that did not commit" is what left the board claiming the
+   * preflight was invalid when in fact a reason was all that was missing.
+   */
+  private interpretCommitFailure(
+    problem: ApiProblem,
+    token: string,
+    attempt: string,
+  ): CommitMoveResult {
+    const views = (rows: readonly ConflictDto[] | null) => (rows ?? []).map(toConflictView);
+
+    switch (problem.code) {
+      case 'SOFT_CONFLICT_APPROVAL_REQUIRED': {
+        // The token SURVIVES this refusal. The retry carries a reason, so its
+        // body differs and it needs a new key — this one is spent.
+        this.keys.forget(attempt);
+        const kept = problem.token ?? token;
+        const expiresAtMs = problem.expiresUtc === null
+          ? Date.now() + PREFLIGHT_TTL_MS
+          : Date.parse(problem.expiresUtc);
+        const pf = this.issued.get(token);
+        if (pf && kept !== token) this.issued.set(kept, { ...pf, token: kept });
+        return {
+          kind: 'reason-required',
+          token: kept,
+          expiresAtMs: Number.isFinite(expiresAtMs) ? expiresAtMs : Date.now() + PREFLIGHT_TTL_MS,
+          conflicts: views(problem.conflicts),
+        };
+      }
+
+      case 'HARD_CONFLICT':
+        this.keys.forget(attempt);
+        this.issued.delete(token);
+        this.pendingProposal.set(null);
+        // Both sets present means the board changed under the operator, not
+        // that the move was always impossible. Refresh so what they see next
+        // is the board the server just described.
+        if (problem.conflictsWhenShown !== null) {
+          void this.loadBoard();
+          this.record('Move refused — board changed', problem.detail ?? '',
+            problem.conflicts?.[0]?.code);
+          return {
+            kind: 'board-changed',
+            conflicts: views(problem.conflicts),
+            conflictsWhenShown: views(problem.conflictsWhenShown),
+          };
+        }
+        this.record('Move refused — hard conflict', problem.detail ?? '',
+          problem.conflicts?.[0]?.code);
+        return { kind: 'hard-conflict', conflicts: views(problem.conflicts) };
+
+      case 'PREFLIGHT_EXPIRED':
+        this.keys.forget(attempt);
+        this.issued.delete(token);
+        this.pendingProposal.set(null);
+        return { kind: 'expired' };
+
+      case 'STALE_VERSION':
+        this.keys.forget(attempt);
+        this.issued.delete(token);
+        this.pendingProposal.set(null);
+        void this.loadBoard();
+        return { kind: 'stale', current: problem.current };
+
+      default:
+        // A retryable failure keeps its key: the next attempt is the same
+        // request, and the server must be able to recognise it as a replay
+        // rather than book the move a second time.
+        if (!problem.retryable) this.keys.forget(attempt);
+        return { kind: 'denied', code: String(problem.code), detail: problem.detail };
+    }
+  }
+
+  private fromPreflightResponse(
+    res: PreflightResponseDto,
+    proposal: MoveProposal,
+  ): PreflightResult {
+    const day = this.businessDay();
+    const expires = Date.parse(res.expiresUtc);
+    return {
+      token: res.token,
+      // The server's own expiry wins; ttlSeconds is the same value counted
+      // down, and PREFLIGHT_TTL_MS is only a shape for the in-memory path.
+      expiresAtMs: Number.isFinite(expires) ? expires : Date.now() + res.ttlSeconds * 1000,
+      proposal: { ...proposal, fromRowVersion: res.fromRowVersion },
+      proposedStart: clockLabel(day, res.proposedStartUtc),
+      proposedEnd: clockLabel(day, res.proposedEndUtc),
+      proposedStartUtc: res.proposedStartUtc,
+      proposedEndUtc: res.proposedEndUtc,
+      conflicts: res.conflicts.map(toConflictView),
+      commitAllowed: res.commitAllowed,
+      requiresReason: res.requiresReason,
+    };
+  }
+
+  /* ---- the in-memory path, unchanged in behaviour ---------------------- */
+
+  private async preflightInMemory(proposal: MoveProposal): Promise<PreflightResult> {
+    await this.settle(320);
+
+    const day = this.businessDay();
+    const startPct = pctAt(day, proposal.startUtc);
+    const appt = this.demoAppointments().find((a) => a.id === proposal.appointmentId);
+    const widthPct = pctForMinutes(day, appt?.durationMin ?? 60);
+
+    // The demo lanes carry no resource ids, so the target lane is the one the
+    // appointment is already drawn on.
+    const lane = this.demoLanes().find((l) =>
+      l.slots.some((slotOf) => slotOf.appointmentId === proposal.appointmentId));
+    const conflicts: ConflictDefinition[] = [];
+
+    // A room already occupied in the target window is physically impossible.
+    const overlaps = lane?.slots.some((slotOf) =>
+      slotOf.state !== 'turnover' &&
+      slotOf.appointmentId !== proposal.appointmentId &&
+      startPct < slotOf.startPct + slotOf.widthPct &&
+      slotOf.startPct < startPct + widthPct);
+
+    if (overlaps) {
+      conflicts.push(lane?.role === 'Room' ? CONFLICTS['CON-002'] : CONFLICTS['CON-001']);
+    }
+    if (lane?.slots.some((slotOf) => slotOf.state === 'blocked')) {
+      conflicts.push(CONFLICTS['CON-004']);
+    }
+
+    const endMs = Date.parse(proposal.startUtc) + (appt?.durationMin ?? 60) * 60_000;
+    const views: ConflictView[] = conflicts.map((c) => ({
+      ...c,
+      // The in-memory path has no rule discriminator to report, and inventing
+      // one would make a demo conflict indistinguishable from a real breach.
+      rule: 'simulated',
+      resolutions: [],
+    }));
+
+    const result: PreflightResult = {
+      token: 'pf_' + Math.random().toString(36).slice(2, 10),
+      expiresAtMs: Date.now() + PREFLIGHT_TTL_MS,
+      proposal,
+      proposedStart: clockLabel(day, proposal.startUtc),
+      proposedEnd: clockLabel(day, new Date(endMs).toISOString()),
+      proposedStartUtc: proposal.startUtc,
+      proposedEndUtc: new Date(endMs).toISOString(),
+      conflicts: views,
+      commitAllowed: views.every((c) => c.overridable),
+      requiresReason: views.some((c) => c.overridable),
+    };
+
+    this.issued.set(result.token, result);
+    this.pendingProposal.set(result);
+    return result;
+  }
+
+  /**
+   * Moves the slot the proposal names, rather than appending a new one.
+   *
+   * Even in the demo this has to be a move: an append meant the board grew a
+   * duplicate on every commit, and no later screen could tell which of the two
+   * was the appointment.
+   */
+  private async commitMoveInMemory(token: string, reason?: string): Promise<CommitMoveResult> {
     await this.settle();
 
     const pf = this.issued.get(token);
     if (!pf || isExpired(pf)) {
       this.issued.delete(token);
       this.pendingProposal.set(null);
-      return { kind: 'denied', code: API_ERROR.authorizationDenied.code };
+      return { kind: 'expired' };
     }
     if (!pf.commitAllowed) {
-      return { kind: 'denied', code: API_ERROR.authorizationDenied.code };
+      return { kind: 'hard-conflict', conflicts: pf.conflicts };
+    }
+    if (pf.requiresReason && (reason ?? '').trim().length === 0) {
+      return {
+        kind: 'reason-required',
+        token,
+        expiresAtMs: pf.expiresAtMs,
+        conflicts: pf.conflicts,
+      };
     }
 
-    const before = this.lanes().map((l) => ({ ...l, slots: [...l.slots] }));
+    const before = this.demoLanes().map((l) => ({ ...l, slots: [...l.slots] }));
     this.undoable.set({ lanes: before, at: Date.now(), what: 'Move committed' });
 
-    this.lanes.update((ls) => ls.map((l) => l.name !== pf.proposal.laneName ? l : {
+    const day = this.businessDay();
+    const startPct = pctAt(day, pf.proposal.startUtc);
+
+    this.demoLanes.update((ls) => ls.map((l) => ({
       ...l,
-      slots: [...l.slots, {
-        label: 'Moved', startPct: pf.proposal.startPct,
-        widthPct: pf.proposal.widthPct, state: 'booked' as const,
-      }],
-    }));
+      slots: l.slots.map((slotOf) => slotOf.appointmentId === pf.proposal.appointmentId
+        ? { ...slotOf, startPct, startUtc: pf.proposal.startUtc }
+        : slotOf),
+    })));
 
     this.issued.delete(token);
     this.pendingProposal.set(null);
     this.record('Move committed', `${pf.proposedStart}–${pf.proposedEnd}${reason ? ' — ' + reason : ''}`,
       pf.conflicts[0]?.code);
 
-    return { kind: 'committed', value: token };
+    // No DTO: nothing served this move. The caller reads the board, not this.
+    return { kind: 'committed', appointment: null };
   }
 
   // ---- undo (CON-006) ---------------------------------------------------
 
   private readonly undoable = signal<{ lanes: Lane[]; at: number; what: string } | null>(null);
 
+  /**
+   * Never true against the real API.
+   *
+   * A local snapshot cannot undo a committed reassign — the server holds the
+   * appointment and has already audited the change. Reverting it is a second
+   * preflight and commit back to the original window, which is a compensating
+   * reschedule and not an undo, so the affordance is not offered rather than
+   * offered and then refused.
+   */
   readonly canUndo = computed(() => {
+    if (this.realApi) return false;
     const u = this.undoable();
     return !!u && Date.now() - u.at < UNDO_WINDOW_MS;
   });
@@ -253,12 +616,12 @@ export class WorkspaceStore {
    */
   undoLastMove(): 'undone' | 'window-closed' {
     const u = this.undoable();
-    if (!u) return 'window-closed';
+    if (!u || this.realApi) return 'window-closed';
     if (Date.now() - u.at >= UNDO_WINDOW_MS) {
       this.undoable.set(null);
       return 'window-closed';
     }
-    this.lanes.set(u.lanes);
+    this.demoLanes.set(u.lanes);
     this.undoable.set(null);
     this.record('Move undone', u.what);
     return 'undone';
@@ -267,35 +630,35 @@ export class WorkspaceStore {
   // ---- appointments -----------------------------------------------------
   async resolveConflict(id: string, reason: string): Promise<WriteResult<Appointment>> {
     await this.settle();
-    const appt = this.appointments().find((a) => a.id === id);
+    const appt = this.demoAppointments().find((a) => a.id === id);
     if (!appt) return { kind: 'denied', code: API_ERROR.authorizationDenied.code };
 
-    this.appointments.update((list) =>
+    this.demoAppointments.update((list) =>
       list.map((a) => (a.id === id ? { ...a, state: 'booked', version: bump(a.version) } : a)));
-    this.lanes.update((ls) =>
+    this.demoLanes.update((ls) =>
       ls.map((l) => ({ ...l, slots: l.slots.map((s) => s.state === 'conflict' ? { ...s, state: 'booked', label: 'Rebooked' } : s) })));
     this.record('Conflict overridden', `${appt.guestAlias} — ${reason}`, 'CON-001');
     return { kind: 'committed', value: appt };
   }
 
   createAppointment(): Appointment {
-    const n = 4900 + this.appointments().length;
+    const n = 4900 + this.demoAppointments().length;
     const a: Appointment = {
       id: `a-${n}`, guestAlias: `Guest ${n}`, service: 'Aromatherapy 60',
       provider: 'Priya Nair', room: 'Room 2', start: '5:30pm',
       durationMin: 60, state: 'booked', version: 'v1',
     };
-    this.appointments.update((l) => [...l, a]);
-    this.lanes.update((ls) => ls.map((l, i) => i === 2
-      ? { ...l, slots: [...l.slots, { label: 'Aromatherapy 60', startPct: 78, widthPct: 18, state: 'booked' as const }] }
+    this.demoAppointments.update((l) => [...l, a]);
+    this.demoLanes.update((ls) => ls.map((l, i) => i === 2
+      ? { ...l, slots: [...l.slots, { label: 'Aromatherapy 60', startPct: 78, widthPct: 18, state: 'booked' as const, appointmentId: a.id }] }
       : l));
     this.record('Appointment created', a.guestAlias);
     return a;
   }
 
   cancelAppointment(id: string): void {
-    const a = this.appointments().find((x) => x.id === id);
-    this.appointments.update((l) => l.filter((x) => x.id !== id));
+    const a = this.demoAppointments().find((x) => x.id === id);
+    this.demoAppointments.update((l) => l.filter((x) => x.id !== id));
     this.record('Appointment cancelled', a?.guestAlias ?? id);
   }
 
@@ -411,7 +774,7 @@ export class WorkspaceStore {
   }
 
   reset(): void {
-    this.appointments.set([...APPOINTMENTS]);
+    this.demoAppointments.set([...APPOINTMENTS]);
     this.arrivals.set([...ARRIVALS]);
     this.devices.set([...DEVICES]);
     this.stock.set([...STOCK]);
@@ -419,19 +782,127 @@ export class WorkspaceStore {
     this.rules.set([...MESSAGE_RULES]);
     this.owners.set([...OWNERS]);
     this.staff.set([...STAFF]);
-    this.lanes.set(LANES.map((l) => ({ ...l, slots: [...l.slots] })));
+    this.demoLanes.set(LANES.map((l) => ({ ...l, slots: [...l.slots] })));
     this.checkedIn.set([]);
     this.ownershipPreflight.set('idle');
     this.record('Demo data reset', 'All screens returned to their starting state');
+
+    // Reset means "show the starting state", and against the real API that is
+    // whatever the server holds — not the seed arrays above.
+    if (this.realApi) void this.loadBoard();
   }
 }
 
 const bump = (v: string) => 'v' + (Number(v.replace('v', '')) + 1);
 
-/** Minutes since midnight → property-local clock label. */
-const fmtMin = (m: number): string => {
-  const h24 = Math.floor(m / 60);
-  const mm = String(m % 60).padStart(2, '0');
-  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
-  return `${h12}:${mm}${h24 < 12 ? 'am' : 'pm'}`;
+/**
+ * One page is the whole board.
+ *
+ * A day at one property does not exceed this, and the server caps the page
+ * anyway. When it does, loadBoard records that the board is truncated rather
+ * than quietly drawing part of a day — a scheduler who cannot see an
+ * appointment will double-book over it.
+ */
+const BOARD_PAGE_LIMIT = 200;
+
+/**
+ * One calendar day in the property's zone, as instants.
+ *
+ * Local midnight to the next local midnight, so an appointment is returned by
+ * the day the property considers it to be on — not the day UTC does.
+ */
+const localDayWindow = (date: string, timeZone: string): { from: string; to: string } => {
+  const window = fallbackDay(date, timeZone, 0, 24 * 60);
+  return {
+    from: new Date(window.openUtcMs).toISOString(),
+    to: new Date(window.closeUtcMs).toISOString(),
+  };
+};
+
+/* ------------------------------------------------------------------ */
+/* Wire → view mapping. The only place a DTO becomes a view model.     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * §7.1 status → the board's visual state.
+ *
+ * `conflict` is absent by design: a standing conflict is not a property of an
+ * appointment the server publishes, it is the answer to a preflight. Painting
+ * a slot amber because a previous preflight said so would show a conflict the
+ * server no longer believes in.
+ */
+const slotState = (status: string): SlotState => {
+  switch (status) {
+    case 'InService':  return 'in-progress';
+    case 'Completed':  return 'complete';
+    case 'Cancelled':
+    case 'NoShow':     return 'blocked';
+    default:           return 'booked';
+  }
+};
+
+const toViewAppointment = (day: BusinessDay, a: AppointmentDto): Appointment => ({
+  id: a.appointmentId,
+  guestAlias: a.guestAlias,
+  service: a.serviceName,
+  // The server sends null when nothing is assigned yet; the board reads it as
+  // a word, and an empty cell would look like a rendering fault.
+  provider: a.providerId ?? 'Unassigned',
+  room: a.roomId ?? 'Unassigned',
+  start: clockLabel(day, a.startUtc),
+  durationMin: a.durationMinutes,
+  state: slotState(a.status),
+  // Stringified for the view model's optimistic-concurrency field. Every
+  // request that needs the real value takes it from the DTO, not from here.
+  version: String(a.rowVersion),
+});
+
+const toSlot = (day: BusinessDay, a: AppointmentDto): LaneSlot => ({
+  label: a.serviceName,
+  startPct: pctAt(day, a.startUtc),
+  // Floored so a 30-minute service on a long board is still clickable.
+  widthPct: Math.max(3, pctForMinutes(day, a.durationMinutes)),
+  state: slotState(a.status),
+  appointmentId: a.appointmentId,
+  startUtc: a.startUtc,
+  providerId: a.providerId,
+  roomId: a.roomId,
+  rowVersion: a.rowVersion,
+  durationMinutes: a.durationMinutes,
+});
+
+/**
+ * One lane per resource the day actually uses.
+ *
+ * An appointment with both a provider and a room appears on BOTH lanes — it
+ * occupies both, and a room lane that omitted it would read as free. Lanes are
+ * not read from configuration because no resource endpoint exists yet, so an
+ * empty room is simply not drawn; that is a gap, not a decision.
+ */
+const buildLanes = (day: BusinessDay, rows: readonly AppointmentDto[]): Lane[] => {
+  const lanes = new Map<string, { role: string; slots: LaneSlot[] }>();
+
+  const add = (name: string, role: string, slot: LaneSlot): void => {
+    const key = `${role}|${name}`;
+    const lane = lanes.get(key) ?? { role, slots: [] };
+    lane.slots.push(slot);
+    lanes.set(key, lane);
+  };
+
+  for (const a of rows) {
+    const slot = toSlot(day, a);
+    if (a.providerId !== null) add(a.providerId, 'Provider', slot);
+    if (a.roomId !== null) add(a.roomId, 'Room', slot);
+    if (a.providerId === null && a.roomId === null) add('Unassigned', 'Provider', slot);
+  }
+
+  return [...lanes.entries()]
+    // Providers first, then rooms, each alphabetically — the same reading
+    // order as the seeded board, so the lane filter behaves the same way.
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, lane]) => ({
+      name: key.slice(key.indexOf('|') + 1),
+      role: lane.role,
+      slots: lane.slots.sort((x, y) => x.startPct - y.startPct),
+    }));
 };

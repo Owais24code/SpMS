@@ -12,6 +12,10 @@
     <meta name="theme-color" content="#003057" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#000d18" media="(prefers-color-scheme: dark)" />
     <link rel="icon" href="favicon.ico" />
+    <!-- Deploy-time config, overwritten per environment. Loaded before the
+         bundle so the API base URL is known at first module evaluation; not
+         fingerprinted, so one built bundle serves every environment. -->
+    <script src="assets/config.js"></script>
     <script>
       // Applied before first paint so the theme never flashes.
       (function () {

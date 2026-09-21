@@ -98,7 +98,7 @@ import { AuthService } from '../../core/services/auth.service';
             <dt>Target</dt><dd>WCAG 2.2 AA</dd>
             <dt>Motion</dt><dd>Follows your system reduced-motion setting</dd>
             <dt>Contrast audit</dt><dd><span class="badge badge--ok">44 pairs passing</span></dd>
-            <dt>Keyboard</dt><dd>Every drag action has a keyboard equivalent</dd>
+            <dt>Keyboard</dt><dd>The scheduling board is moved with the keyboard: M, arrow keys, Enter</dd>
           </dl>
         </div>
       </div>
