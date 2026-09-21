@@ -1,0 +1,28 @@
+{
+  // Cloudflare Workers static assets.
+  //
+  // This is the Workers Builds path, not Pages. `npx wrangler deploy` reads
+  // this file, so without it the deploy step fails with no config found — the
+  // dashboard pre-fills that command but cannot supply the file.
+  //
+  // There is no "main" entry on purpose: this Worker has no code, only assets.
+  // A static-only Worker is valid and is what a built Angular app needs.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "spms",
+  "compatibility_date": "2026-09-01",
+
+  "assets": {
+    // Relative to this file, so the dashboard's Path must be /web for the
+    // build output to be where this says it is.
+    "directory": "./dist/web/browser",
+
+    // The SPA fallback. An unmatched path is served /index.html with a 200
+    // rather than a 404 — the same problem Blob static hosting has, and the
+    // reason Front Door needs a rewrite rule there.
+    //
+    // public/_redirects says the same thing for Pages, which reads that file
+    // and ignores this one. The two agree; neither is a fallback for the other
+    // being wrong.
+    "not_found_handling": "single-page-application"
+  }
+}
