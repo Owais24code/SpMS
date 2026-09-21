@@ -26,3 +26,6 @@ Thumbs.db
 
 # offline NuGet feed — 30MB of binaries, rebuilt by api/tools/vendor-nuget.py
 api/vendor/
+
+# files delivered into the chat, not source
+Claude outputs/
