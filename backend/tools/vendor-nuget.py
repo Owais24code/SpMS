@@ -42,6 +42,10 @@ ROOTS = [
     "microsoft.net.test.sdk",
     "xunit",
     "xunit.runner.visualstudio",
+    # modular monolith + authorization (added with the R1 schema)
+    "microsoft.entityframeworkcore.design",
+    "openfga.sdk",
+    "dotnet-ef",
 ]
 
 
