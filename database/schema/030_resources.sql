@@ -3,44 +3,15 @@
 
 CREATE SCHEMA IF NOT EXISTS resources AUTHORIZATION spms_owner;
 
-CREATE TABLE resources.facility (
-    facility_id                    uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    code                           text NOT NULL,
-    name                           text NOT NULL,
-    facility_type                  text NOT NULL,
-    status                         text NOT NULL DEFAULT 'Active',
-    effective_from                 timestamptz NOT NULL DEFAULT now(),
-    effective_to                   timestamptz,
-    source_system                  text NOT NULL DEFAULT 'Spa',
-    source_key                     text,
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT facility_pkey PRIMARY KEY (facility_id),
-    CONSTRAINT facility_facility_type_ck CHECK (facility_type IN ('Spa', 'Salon', 'Fitness', 'Pool', 'Thermal', 'Retail')),
-    CONSTRAINT facility_version_ck CHECK (version >= 1),
-    CONSTRAINT facility_tenant_identity_uq UNIQUE (tenant_id, facility_id),
-    CONSTRAINT facility_prop_ref_uq UNIQUE (tenant_id, property_id, facility_id),
-    CONSTRAINT facility_status_known CHECK (status IN ('Active', 'Retired')),
-    CONSTRAINT facility_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
-    CONSTRAINT facility_code_uq UNIQUE (tenant_id, property_id, code)
-);
-
 CREATE TABLE resources.location (
     location_id                    uuid NOT NULL DEFAULT core.uuid_v7(),
     tenant_id                      uuid NOT NULL,
     property_id                    uuid NOT NULL,
-    facility_id                    uuid,
     parent_location_id             uuid,
     location_code                  text NOT NULL,
     location_name                  text NOT NULL,
-    floor_code                     text,
     location_type                  text NOT NULL,
+    layout                         jsonb,
     status                         text NOT NULL DEFAULT 'Active',
     effective_from                 timestamptz NOT NULL DEFAULT now(),
     effective_to                   timestamptz,
@@ -53,7 +24,7 @@ CREATE TABLE resources.location (
     updated_by                     uuid,
     correlation_id                 text,
     CONSTRAINT location_pkey PRIMARY KEY (location_id),
-    CONSTRAINT location_location_type_ck CHECK (location_type IN ('Treatment', 'Storage', 'Laundry', 'Retail', 'Reception', 'Locker', 'Relaxation')),
+    CONSTRAINT location_location_type_ck CHECK (location_type IN ('Facility', 'Floor', 'Treatment', 'Storage', 'Laundry', 'Retail', 'Reception', 'Locker', 'Relaxation')),
     CONSTRAINT location_version_ck CHECK (version >= 1),
     CONSTRAINT location_tenant_identity_uq UNIQUE (tenant_id, location_id),
     CONSTRAINT location_prop_ref_uq UNIQUE (tenant_id, property_id, location_id),
@@ -61,6 +32,8 @@ CREATE TABLE resources.location (
     CONSTRAINT location_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
     CONSTRAINT location_code_uq UNIQUE (tenant_id, property_id, location_code)
 );
+COMMENT ON TABLE resources.location IS 'A place at the property, nestable (floor > wing > room store). The optional layout drives the floor plan. [stock grain; rooms; lockers]';
+COMMENT ON COLUMN resources.location.layout IS 'floor-plan geometry for the board; presentation only';
 
 CREATE TABLE resources.resource (
     resource_id                    uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -85,7 +58,7 @@ CREATE TABLE resources.resource (
     updated_by                     uuid,
     correlation_id                 text,
     CONSTRAINT resource_pkey PRIMARY KEY (resource_id),
-    CONSTRAINT resource_resource_type_ck CHECK (resource_type IN ('TreatmentRoom', 'WetRoom', 'CoupleRoom', 'Chair', 'Equipment')),
+    CONSTRAINT resource_resource_type_ck CHECK (resource_type IN ('TreatmentRoom', 'WetRoom', 'CoupleRoom', 'Chair')),
     CONSTRAINT resource_capacity_ck CHECK (capacity >= 1),
     CONSTRAINT resource_version_ck CHECK (version >= 1),
     CONSTRAINT resource_tenant_identity_uq UNIQUE (tenant_id, resource_id),
@@ -94,85 +67,7 @@ CREATE TABLE resources.resource (
     CONSTRAINT resource_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
     CONSTRAINT resource_code_uq UNIQUE (tenant_id, property_id, code)
 );
-COMMENT ON TABLE resources.resource IS 'A bookable room or piece of equipment. CON-002 (no double booking) is enforced on its assignments. [CON-002; §53.2 rooms/resources]';
-COMMENT ON COLUMN resources.resource.capacity IS 'guests one booking may seat (a couple room is 2); one booking at a time regardless';
-
-CREATE TABLE resources.resource_layout (
-    resource_layout_id             uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    resource_id                    uuid NOT NULL,
-    layout_name                    text NOT NULL,
-    layout_version                 integer NOT NULL,
-    width_units                    numeric(14,6) NOT NULL,
-    height_units                   numeric(14,6) NOT NULL,
-    status                         text NOT NULL DEFAULT 'Draft',
-    source_system                  text NOT NULL DEFAULT 'Spa',
-    source_key                     text,
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT resource_layout_pkey PRIMARY KEY (resource_layout_id),
-    CONSTRAINT resource_layout_layout_version_ck CHECK (layout_version >= 1),
-    CONSTRAINT resource_layout_width_units_ck CHECK (width_units > 0),
-    CONSTRAINT resource_layout_height_units_ck CHECK (height_units > 0),
-    CONSTRAINT resource_layout_version_ck CHECK (version >= 1),
-    CONSTRAINT resource_layout_tenant_identity_uq UNIQUE (tenant_id, resource_layout_id),
-    CONSTRAINT resource_layout_prop_ref_uq UNIQUE (tenant_id, property_id, resource_layout_id),
-    CONSTRAINT resource_layout_status_known CHECK (status IN ('Draft', 'Active', 'Retired')),
-    CONSTRAINT resource_layout_version_uq UNIQUE (tenant_id, resource_id, layout_version)
-);
-
-CREATE TABLE resources.resource_position (
-    resource_position_id           uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    resource_layout_id             uuid NOT NULL,
-    position_code                  text NOT NULL,
-    x                              numeric(14,6) NOT NULL,
-    y                              numeric(14,6) NOT NULL,
-    accessible                     boolean NOT NULL DEFAULT false,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT resource_position_pkey PRIMARY KEY (resource_position_id),
-    CONSTRAINT resource_position_tenant_identity_uq UNIQUE (tenant_id, resource_position_id),
-    CONSTRAINT resource_position_code_uq UNIQUE (tenant_id, resource_layout_id, position_code)
-);
-
-CREATE TABLE resources.resource_schedule (
-    resource_schedule_id           uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    resource_id                    uuid NOT NULL,
-    day_of_week                    smallint NOT NULL,
-    start_time                     time NOT NULL,
-    end_time                       time NOT NULL,
-    status                         text NOT NULL DEFAULT 'Active',
-    effective_from                 timestamptz NOT NULL DEFAULT now(),
-    effective_to                   timestamptz,
-    source_system                  text NOT NULL DEFAULT 'Spa',
-    source_key                     text,
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT resource_schedule_pkey PRIMARY KEY (resource_schedule_id),
-    CONSTRAINT resource_schedule_day_of_week_ck CHECK (day_of_week BETWEEN 1 AND 7),
-    CONSTRAINT resource_schedule_version_ck CHECK (version >= 1),
-    CONSTRAINT resource_schedule_tenant_identity_uq UNIQUE (tenant_id, resource_schedule_id),
-    CONSTRAINT resource_schedule_status_known CHECK (status IN ('Active', 'Retired')),
-    CONSTRAINT resource_schedule_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
-    CONSTRAINT resource_schedule_time_forward CHECK (end_time > start_time)
-);
-COMMENT ON TABLE resources.resource_schedule IS 'Weekly recurring availability of a resource. One-off closures are maintenance_window rows. [§53.2 availability]';
+COMMENT ON TABLE resources.resource IS 'A bookable room or chair. CON-002 (no double booking) is enforced on scheduling.appointment. [CON-002; §53.2 rooms/resources]';
 
 CREATE TABLE resources.maintenance_window (
     maintenance_window_id          uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -199,30 +94,6 @@ CREATE TABLE resources.maintenance_window (
     CONSTRAINT maintenance_window_range_forward CHECK (ends_at > starts_at)
 );
 
-CREATE TABLE resources.sanitation_record (
-    sanitation_record_id           uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    resource_id                    uuid NOT NULL,
-    performed_at                   timestamptz NOT NULL,
-    performed_by                   uuid NOT NULL,
-    checklist_code                 text NOT NULL,
-    result                         text NOT NULL,
-    note                           text,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT sanitation_record_pkey PRIMARY KEY (sanitation_record_id),
-    CONSTRAINT sanitation_record_result_ck CHECK (result IN ('Pass', 'Fail', 'NeedsAttention')),
-    CONSTRAINT sanitation_record_tenant_identity_uq UNIQUE (tenant_id, sanitation_record_id)
-);
-COMMENT ON COLUMN resources.sanitation_record.performed_at IS 'when it happened; may precede created_at for offline capture';
-COMMENT ON COLUMN resources.sanitation_record.performed_by IS 'principal';
-
-ALTER TABLE resources.facility ADD CONSTRAINT facility_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE resources.facility ADD CONSTRAINT facility_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE resources.location ADD CONSTRAINT location_facility_id_fk FOREIGN KEY (tenant_id, property_id, facility_id) REFERENCES resources.facility (tenant_id, property_id, facility_id) ON DELETE RESTRICT;
-CREATE INDEX location_facility_id_ix ON resources.location (tenant_id, property_id, facility_id);
 ALTER TABLE resources.location ADD CONSTRAINT location_parent_location_id_fk FOREIGN KEY (tenant_id, property_id, parent_location_id) REFERENCES resources.location (tenant_id, property_id, location_id) ON DELETE RESTRICT;
 CREATE INDEX location_parent_location_id_ix ON resources.location (tenant_id, property_id, parent_location_id);
 ALTER TABLE resources.location ADD CONSTRAINT location_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
@@ -231,39 +102,17 @@ ALTER TABLE resources.resource ADD CONSTRAINT resource_location_id_fk FOREIGN KE
 CREATE INDEX resource_location_id_ix ON resources.resource (tenant_id, property_id, location_id);
 ALTER TABLE resources.resource ADD CONSTRAINT resource_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE resources.resource ADD CONSTRAINT resource_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE resources.resource_layout ADD CONSTRAINT resource_layout_resource_id_fk FOREIGN KEY (tenant_id, property_id, resource_id) REFERENCES resources.resource (tenant_id, property_id, resource_id) ON DELETE RESTRICT;
-CREATE INDEX resource_layout_resource_id_ix ON resources.resource_layout (tenant_id, property_id, resource_id);
-ALTER TABLE resources.resource_layout ADD CONSTRAINT resource_layout_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE resources.resource_layout ADD CONSTRAINT resource_layout_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE resources.resource_position ADD CONSTRAINT resource_position_resource_layout_id_fk FOREIGN KEY (tenant_id, property_id, resource_layout_id) REFERENCES resources.resource_layout (tenant_id, property_id, resource_layout_id) ON DELETE RESTRICT;
-CREATE INDEX resource_position_resource_layout_id_ix ON resources.resource_position (tenant_id, property_id, resource_layout_id);
-ALTER TABLE resources.resource_position ADD CONSTRAINT resource_position_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE resources.resource_position ADD CONSTRAINT resource_position_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE resources.resource_schedule ADD CONSTRAINT resource_schedule_resource_id_fk FOREIGN KEY (tenant_id, property_id, resource_id) REFERENCES resources.resource (tenant_id, property_id, resource_id) ON DELETE RESTRICT;
-CREATE INDEX resource_schedule_resource_id_ix ON resources.resource_schedule (tenant_id, property_id, resource_id);
-ALTER TABLE resources.resource_schedule ADD CONSTRAINT resource_schedule_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE resources.resource_schedule ADD CONSTRAINT resource_schedule_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
 ALTER TABLE resources.maintenance_window ADD CONSTRAINT maintenance_window_resource_id_fk FOREIGN KEY (tenant_id, property_id, resource_id) REFERENCES resources.resource (tenant_id, property_id, resource_id) ON DELETE RESTRICT;
 CREATE INDEX maintenance_window_resource_id_ix ON resources.maintenance_window (tenant_id, property_id, resource_id);
 ALTER TABLE resources.maintenance_window ADD CONSTRAINT maintenance_window_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE resources.maintenance_window ADD CONSTRAINT maintenance_window_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE resources.sanitation_record ADD CONSTRAINT sanitation_record_resource_id_fk FOREIGN KEY (tenant_id, property_id, resource_id) REFERENCES resources.resource (tenant_id, property_id, resource_id) ON DELETE RESTRICT;
-CREATE INDEX sanitation_record_resource_id_ix ON resources.sanitation_record (tenant_id, property_id, resource_id);
-ALTER TABLE resources.sanitation_record ADD CONSTRAINT sanitation_record_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE resources.sanitation_record ADD CONSTRAINT sanitation_record_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
 
-CREATE TRIGGER facility_touch BEFORE UPDATE ON resources.facility FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER location_touch BEFORE UPDATE ON resources.location FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER resource_touch BEFORE UPDATE ON resources.resource FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER resource_layout_touch BEFORE UPDATE ON resources.resource_layout FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER resource_position_touch BEFORE UPDATE ON resources.resource_position FOR EACH ROW EXECUTE FUNCTION core.touch();
-CREATE TRIGGER resource_schedule_touch BEFORE UPDATE ON resources.resource_schedule FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER maintenance_window_touch BEFORE UPDATE ON resources.maintenance_window FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER sanitation_record_append_only BEFORE UPDATE OR DELETE ON resources.sanitation_record FOR EACH ROW EXECUTE FUNCTION core.forbid_mutation();
 CREATE INDEX resource_capabilities_ix ON resources.resource USING gin (capabilities);
 
 ALTER TABLE resources.maintenance_window ADD CONSTRAINT maintenance_window_no_overlap
     EXCLUDE USING gist (tenant_id WITH =, property_id WITH =, resource_id WITH =,
                         tstzrange(starts_at, ends_at, '[)') WITH &&)
     WHERE (status IN ('Planned', 'Active'));
-CREATE INDEX sanitation_record_resource_ix ON resources.sanitation_record (tenant_id, resource_id, performed_at DESC);

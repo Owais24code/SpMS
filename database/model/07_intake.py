@@ -1,81 +1,59 @@
-"""intake: forms, health intake, provider acknowledgement, treatment notes (restricted; SEC-008).
+"""intake: form definitions, submissions, treatment notes (restricted; SEC-008).
 
-Every table here is reachable only by spms_intake, which the API must SET LOCAL ROLE into.
-Restricted content is envelope-encrypted in the application (Key Vault-wrapped data keys),
-so the database, its backups and its replicas hold ciphertext only.
+Reachable only by spms_intake, which the API must SET LOCAL ROLE into. Restricted content is
+envelope-encrypted in the application, so the database and its backups hold ciphertext only.
 """
 from dsl import *
 
 S = "intake"
 
-table(S, "form_template", MASTER, TENANT, key=None, handoff="completed", grants="intake",
-      spec="§53.2 Booking and intake", statuses=["Draft", "Active", "Retired"],
-      cols=[
-          col("template_code", "text"),
-          col("title", "text"),
-          col("purpose", "text", check="purpose IN ('HealthIntake', 'Consent', 'Waiver', 'Feedback')"),
-      ],
-      uniques=[("code_uq", "tenant_id, template_code")],
-      dropped=[("definition_json", "form_version.schema_json")])
-
-table(S, "form_version", MASTER, TENANT, key=None, handoff="completed", grants="intake",
+table(S, "form_definition", MASTER, TENANT, key=None, grants="intake",
+      handoff="new (replaces form_template + form_version)",
+      spec="§53.2 Booking and intake",
+      doc="One row per published version of a form. A submission references the exact version answered.",
       statuses=["Draft", "Published", "Retired"],
       cols=[
-          col("form_template_id", "uuid", fk="intake.form_template"),
+          col("form_code", "text"),
           col("version_number", "integer", check="version_number >= 1"),
+          col("title", "text"),
+          col("purpose", "text", check="purpose IN ('HealthIntake', 'Consent', 'Waiver', 'Feedback')"),
           col("schema_json", "jsonb", doc="field definitions, including which answers form the minimum-necessary summary"),
           col("published_at", "timestamptz", null=True),
           col("published_by", "uuid", null=True),
       ],
       checks=[("published_complete", "status <> 'Published' OR (published_at IS NOT NULL AND published_by IS NOT NULL)")],
-      uniques=[("number_uq", "tenant_id, form_template_id, version_number")],
-      dropped=[("definition_json", "schema_json")])
-
-table(S, "form_assignment", AGGREGATE, PROPERTY, key=None, source_cols=False, handoff="completed", grants="intake",
-      statuses=["Assigned", "InProgress", "Submitted", "Waived", "Expired"],
-      cols=[
-          col("form_version_id", "uuid", fk="intake.form_version"),
-          col("guest_id", "uuid", fk="guest.guest"),
-          col("appointment_id", "uuid", null=True, fk="scheduling.appointment", same_property=True),
-          col("assigned_at", "timestamptz", default="now()"),
-          col("due_at", "timestamptz", null=True),
-          col("completed_at", "timestamptz", null=True),
-      ],
-      indexes=["form_assignment_appointment_ix ON intake.form_assignment (tenant_id, appointment_id) WHERE status <> 'Waived'"])
+      uniques=[("version_uq", "tenant_id, form_code, version_number")])
 
 table(S, "intake_submission", AGGREGATE, PROPERTY, pk="submission_id", key=None, source_cols=False, grants="intake",
+      handoff="completed (absorbs form_assignment and provider_acknowledgement)",
       spec="SEC-008; DEC-004; intake:update:own:before_lock; provider intake:read:assigned:minimum_necessary",
-      doc="response_cipher is the full answer set (guest and HR-authorised review only). summary_cipher is the "
-          "minimum-necessary subset the assigned provider sees.",
-      statuses=["Draft", "Submitted", "Locked", "Reviewed", "Superseded"],
+      doc="Created as Assigned when a form is due. response_cipher is the full answer set; summary_cipher is the "
+          "minimum-necessary subset the assigned provider sees and acknowledges.",
+      statuses=["Assigned", "Draft", "Submitted", "Locked", "Reviewed", "Waived", "Superseded"],
       cols=[
-          col("form_assignment_id", "uuid", null=True, fk="intake.form_assignment", same_property=True),
-          col("form_version_id", "uuid", fk="intake.form_version"),
+          col("form_definition_id", "uuid", fk="intake.form_definition"),
           col("appointment_id", "uuid", null=True, fk="scheduling.appointment", same_property=True),
           col("guest_id", "uuid", fk="guest.guest"),
           col("submitted_by_guest_id", "uuid", null=True, fk="guest.guest.guest_id", doc="guardian for a minor"),
-          col("response_cipher", "bytea", restricted=True),
+          col("due_at", "timestamptz", null=True),
+          col("response_cipher", "bytea", null=True, restricted=True),
           col("summary_cipher", "bytea", null=True, restricted=True),
-          col("key_version", "text"),
+          col("key_version", "text", null=True),
           col("requires_review", "boolean", default="false"),
           col("submitted_at", "timestamptz", null=True),
           col("locked_at", "timestamptz", null=True),
           col("reviewed_by", "uuid", null=True),
           col("reviewed_at", "timestamptz", null=True),
+          col("acknowledged_by_staff_id", "uuid", null=True, fk="workforce.staff"),
+          col("acknowledged_at", "timestamptz", null=True),
       ],
-      checks=[("submitted_complete", "status = 'Draft' OR submitted_at IS NOT NULL"),
-              ("locked_complete", "status NOT IN ('Locked', 'Reviewed') OR locked_at IS NOT NULL")],
-      dropped=[("template_id text/template_version", "form_version_id FK")])
-
-table(S, "provider_acknowledgement", LEDGER, PROPERTY, handoff="completed", grants="intake",
-      spec="provider intake:acknowledge:assigned",
-      cols=[
-          col("submission_id", "uuid", fk="intake.intake_submission"),
-          col("appointment_id", "uuid", fk="scheduling.appointment", same_property=True),
-          col("staff_id", "uuid", fk="workforce.staff"),
-      ],
-      uniques=[("once_uq", "tenant_id, submission_id, staff_id, appointment_id")],
-      dropped=[("effective_from/effective_to", "an acknowledgement is a moment: created_at")])
+      checks=[("answers_have_key", "(response_cipher IS NULL) = (key_version IS NULL)"),
+              ("submitted_has_answers", "status IN ('Assigned', 'Draft', 'Waived') OR (response_cipher IS NOT NULL AND submitted_at IS NOT NULL)"),
+              ("locked_complete", "status NOT IN ('Locked', 'Reviewed') OR locked_at IS NOT NULL"),
+              ("ack_complete", "(acknowledged_by_staff_id IS NULL) = (acknowledged_at IS NULL)")],
+      indexes=["intake_submission_appointment_ix ON intake.intake_submission (tenant_id, appointment_id) WHERE status <> 'Superseded'"],
+      dropped=[("form_assignment (table)", "status 'Assigned' + due_at"),
+               ("provider_acknowledgement (table)", "acknowledged_by_staff_id/acknowledged_at")])
 
 table(S, "treatment_note", LEDGER, PROPERTY, pk="note_id", grants="intake",
       spec="treatment_notes: create:assigned, read:authored_or_assigned, amend:authored; SEC-008",
@@ -91,5 +69,4 @@ table(S, "treatment_note", LEDGER, PROPERTY, pk="note_id", grants="intake",
           col("amendment_reason", "text", null=True),
       ],
       checks=[("amendment_explained", "(supersedes_note_id IS NULL) = (amendment_reason IS NULL)")],
-      uniques=[("supersedes_uq", "supersedes_note_id")],
-      dropped=[("template_id", "template_code")])
+      uniques=[("supersedes_uq", "supersedes_note_id")])

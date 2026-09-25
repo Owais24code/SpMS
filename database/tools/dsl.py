@@ -38,15 +38,14 @@ DEPENDS = {
     "guest":      ["core"],
     "scheduling": ["core", "catalog", "resources", "workforce", "guest"],
     "intake":     ["core", "catalog", "guest", "workforce", "scheduling"],
-    "visit":      ["core", "guest", "workforce", "resources", "scheduling"],
     "inventory":  ["core", "catalog", "resources", "scheduling"],
-    "commerce":   ["core", "catalog", "resources", "guest", "scheduling", "visit", "inventory"],
+    "commerce":   ["core", "catalog", "resources", "guest", "scheduling", "inventory"],
     "messaging":  ["core", "catalog", "guest", "scheduling"],
     "reporting":  ["core"],
 }
 
 MODULE_ORDER = ["core", "catalog", "resources", "workforce", "guest", "scheduling",
-                "intake", "visit", "inventory", "commerce", "messaging", "reporting"]
+                "intake", "inventory", "commerce", "messaging", "reporting"]
 
 
 @dataclass

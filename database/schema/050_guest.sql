@@ -11,8 +11,11 @@ CREATE TABLE guest.guest (
     legal_first_name               text,
     legal_last_name                text,
     preferred_name                 text,
+    display_alias                  text,
+    public_queue_id                text,
     birth_date                     date,
     locale                         text,
+    preferences                    jsonb NOT NULL DEFAULT '{}',
     merged_into_guest_id           uuid,
     status                         text NOT NULL DEFAULT 'Active',
     source_system                  text NOT NULL DEFAULT 'Spa',
@@ -31,9 +34,12 @@ CREATE TABLE guest.guest (
     CONSTRAINT guest_not_self_merged CHECK (merged_into_guest_id IS DISTINCT FROM guest_id),
     CONSTRAINT guest_principal_uq UNIQUE (principal_id)
 );
-COMMENT ON TABLE guest.guest IS 'One person, recognised across the tenant''s properties. Never merged silently (IDN-001): a merge sets merged_into_guest_id and is reversible through guest_merge_case. [§43 Guest identity, household and delegated authority; IDN-001/002/004/005]';
+COMMENT ON TABLE guest.guest IS 'One person, recognised across the tenant''s properties. Never merged silently (IDN-001). [§43 Guest identity, household and delegated authority; IDN-001/002/004/005]';
 COMMENT ON COLUMN guest.guest.principal_id IS 'set once the guest signs in (magic link)';
+COMMENT ON COLUMN guest.guest.display_alias IS 'IDN-002 privacy alias shown instead of the legal name';
+COMMENT ON COLUMN guest.guest.public_queue_id IS 'IDN-002 public identifier for queues and screens';
 COMMENT ON COLUMN guest.guest.birth_date IS 'minor/guardian rules (IDN-004)';
+COMMENT ON COLUMN guest.guest.preferences IS 'operational preferences (pressure, music, provider gender); health data is refused here - it is intake';
 
 CREATE TABLE guest.guest_contact_point (
     guest_contact_point_id         uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -46,6 +52,7 @@ CREATE TABLE guest.guest_contact_point (
     display_hint                   text NOT NULL,
     is_primary                     boolean NOT NULL DEFAULT false,
     verified_at                    timestamptz,
+    suppression_reason             text,
     status                         text NOT NULL DEFAULT 'Active',
     source_system                  text NOT NULL DEFAULT 'Spa',
     source_key                     text,
@@ -57,58 +64,14 @@ CREATE TABLE guest.guest_contact_point (
     correlation_id                 text,
     CONSTRAINT guest_contact_point_pkey PRIMARY KEY (guest_contact_point_id),
     CONSTRAINT guest_contact_point_contact_type_ck CHECK (contact_type IN ('Email', 'Mobile', 'Phone', 'Address')),
+    CONSTRAINT guest_contact_point_suppression_reason_ck CHECK (suppression_reason IN ('Bounce', 'Complaint', 'Invalid')),
     CONSTRAINT guest_contact_point_version_ck CHECK (version >= 1),
     CONSTRAINT guest_contact_point_tenant_identity_uq UNIQUE (tenant_id, guest_contact_point_id),
-    CONSTRAINT guest_contact_point_status_known CHECK (status IN ('Active', 'Retired'))
+    CONSTRAINT guest_contact_point_status_known CHECK (status IN ('Active', 'Retired', 'Suppressed')),
+    CONSTRAINT guest_contact_point_suppressed_explained CHECK ((status = 'Suppressed') = (suppression_reason IS NOT NULL))
 );
-COMMENT ON TABLE guest.guest_contact_point IS 'lookup_hash is an HMAC of the normalised value (key in Key Vault), so search works without decrypting. [UX-002 universal search by phone/email; SEC-011 verified contact methods]';
+COMMENT ON TABLE guest.guest_contact_point IS 'lookup_hash is an HMAC of the normalised value (key in Key Vault): searchable without decrypting. [UX-002 universal search by phone/email; SEC-011 verified contact methods]';
 COMMENT ON COLUMN guest.guest_contact_point.display_hint IS 'masked form for screens, e.g. j***@example.com';
-
-CREATE TABLE guest.guest_household (
-    guest_household_id             uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    household_name                 text NOT NULL,
-    primary_guest_id               uuid NOT NULL,
-    status                         text NOT NULL DEFAULT 'Active',
-    source_system                  text NOT NULL DEFAULT 'Spa',
-    source_key                     text,
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT guest_household_pkey PRIMARY KEY (guest_household_id),
-    CONSTRAINT guest_household_version_ck CHECK (version >= 1),
-    CONSTRAINT guest_household_tenant_identity_uq UNIQUE (tenant_id, guest_household_id),
-    CONSTRAINT guest_household_status_known CHECK (status IN ('Active', 'Dissolved'))
-);
-
-CREATE TABLE guest.guest_household_member (
-    guest_household_member_id      uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    guest_household_id             uuid NOT NULL,
-    guest_id                       uuid NOT NULL,
-    member_role                    text NOT NULL,
-    status                         text NOT NULL DEFAULT 'Active',
-    effective_from                 timestamptz NOT NULL DEFAULT now(),
-    effective_to                   timestamptz,
-    source_system                  text NOT NULL DEFAULT 'Spa',
-    source_key                     text,
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT guest_household_member_pkey PRIMARY KEY (guest_household_member_id),
-    CONSTRAINT guest_household_member_member_role_ck CHECK (member_role IN ('Primary', 'Adult', 'Minor', 'Dependent')),
-    CONSTRAINT guest_household_member_version_ck CHECK (version >= 1),
-    CONSTRAINT guest_household_member_tenant_identity_uq UNIQUE (tenant_id, guest_household_member_id),
-    CONSTRAINT guest_household_member_status_known CHECK (status IN ('Active', 'Ended')),
-    CONSTRAINT guest_household_member_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
-    CONSTRAINT guest_household_member_member_uq UNIQUE (tenant_id, guest_household_id, guest_id, effective_from)
-);
 
 CREATE TABLE guest.guest_relationship (
     guest_relationship_id          uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -128,42 +91,13 @@ CREATE TABLE guest.guest_relationship (
     updated_by                     uuid,
     correlation_id                 text,
     CONSTRAINT guest_relationship_pkey PRIMARY KEY (guest_relationship_id),
-    CONSTRAINT guest_relationship_relationship_type_ck CHECK (relationship_type IN ('SpousePartner', 'ParentGuardian', 'Child', 'Dependent', 'Assistant', 'Organizer', 'Payer', 'Recipient', 'EmergencyContact')),
+    CONSTRAINT guest_relationship_relationship_type_ck CHECK (relationship_type IN ('Household', 'SpousePartner', 'ParentGuardian', 'Child', 'Dependent', 'Assistant', 'Organizer', 'Payer', 'EmergencyContact')),
     CONSTRAINT guest_relationship_version_ck CHECK (version >= 1),
     CONSTRAINT guest_relationship_tenant_identity_uq UNIQUE (tenant_id, guest_relationship_id),
     CONSTRAINT guest_relationship_status_known CHECK (status IN ('Active', 'Ended')),
     CONSTRAINT guest_relationship_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
     CONSTRAINT guest_relationship_not_self CHECK (guest_id <> related_guest_id)
 );
-
-CREATE TABLE guest.guest_preference (
-    preference_id                  uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid,
-    guest_id                       uuid NOT NULL,
-    category                       text NOT NULL,
-    value_json                     jsonb NOT NULL,
-    strength                       text NOT NULL,
-    source                         text NOT NULL,
-    privacy_class                  text NOT NULL,
-    observed_at                    timestamptz NOT NULL DEFAULT now(),
-    expires_at                     timestamptz,
-    status                         text NOT NULL DEFAULT 'Active',
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT guest_preference_pkey PRIMARY KEY (preference_id),
-    CONSTRAINT guest_preference_strength_ck CHECK (strength IN ('Required', 'Preferred', 'Avoid')),
-    CONSTRAINT guest_preference_source_ck CHECK (source IN ('Guest', 'Staff', 'Import')),
-    CONSTRAINT guest_preference_privacy_class_ck CHECK (privacy_class IN ('Operational', 'Personal')),
-    CONSTRAINT guest_preference_version_ck CHECK (version >= 1),
-    CONSTRAINT guest_preference_tenant_identity_uq UNIQUE (tenant_id, preference_id),
-    CONSTRAINT guest_preference_status_known CHECK (status IN ('Active', 'Expired', 'Retired'))
-);
-COMMENT ON COLUMN guest.guest_preference.privacy_class IS 'clinical data is refused here by design; it belongs to intake';
 
 CREATE TABLE guest.guest_merge_case (
     guest_merge_case_id            uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -196,32 +130,7 @@ CREATE TABLE guest.guest_merge_case (
     CONSTRAINT guest_merge_case_human_reviewed CHECK (status NOT IN ('Approved', 'Merged') OR reviewed_by IS NOT NULL),
     CONSTRAINT guest_merge_case_split_explained CHECK (status <> 'Split' OR (split_at IS NOT NULL AND split_reason IS NOT NULL))
 );
-
-CREATE TABLE guest.privacy_alias (
-    privacy_alias_id               uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    guest_id                       uuid NOT NULL,
-    alias_type                     text NOT NULL,
-    alias_value                    text NOT NULL,
-    status                         text NOT NULL DEFAULT 'Active',
-    effective_from                 timestamptz NOT NULL DEFAULT now(),
-    effective_to                   timestamptz,
-    source_system                  text NOT NULL DEFAULT 'Spa',
-    source_key                     text,
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT privacy_alias_pkey PRIMARY KEY (privacy_alias_id),
-    CONSTRAINT privacy_alias_alias_type_ck CHECK (alias_type IN ('DisplayAlias', 'PublicQueueId')),
-    CONSTRAINT privacy_alias_version_ck CHECK (version >= 1),
-    CONSTRAINT privacy_alias_tenant_identity_uq UNIQUE (tenant_id, privacy_alias_id),
-    CONSTRAINT privacy_alias_status_known CHECK (status IN ('Active', 'Retired')),
-    CONSTRAINT privacy_alias_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from)
-);
-COMMENT ON TABLE guest.privacy_alias IS 'Display alias and public queue identifier, exposed instead of legal name where purpose allows. [IDN-002]';
+COMMENT ON TABLE guest.guest_merge_case IS 'Kept typed: a reviewed, reversible merge is evidence with its own lifecycle. [IDN-001; IDENTITY_MERGE_SPLIT_CONTROL.md]';
 
 CREATE TABLE guest.delegated_authority (
     delegated_authority_id         uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -229,7 +138,6 @@ CREATE TABLE guest.delegated_authority (
     guest_id                       uuid NOT NULL,
     delegate_guest_id              uuid,
     delegate_principal_id          uuid,
-    guest_relationship_id          uuid,
     allowed_actions                text[] NOT NULL,
     property_ids                   uuid[],
     financial_limit_minor          bigint,
@@ -265,7 +173,7 @@ CREATE TABLE guest.delegated_authority (
     CONSTRAINT delegated_authority_revocation_complete CHECK ((status = 'Revoked') = (revoked_at IS NOT NULL AND revoked_by IS NOT NULL)),
     CONSTRAINT delegated_authority_expires CHECK (effective_to IS NOT NULL)
 );
-COMMENT ON TABLE guest.delegated_authority IS 'A delegate acts only within what is written here and never inherits health data by relationship. Mirrored to OpenFGA as a conditional tuple (time_bound). [IDN-003 (explicit scope, actions, financial limit, visibility, expiry, revocation, evidence)]';
+COMMENT ON TABLE guest.delegated_authority IS 'A delegate acts only within what is written here. Mirrored to OpenFGA as a conditional tuple. [IDN-003 (explicit scope, actions, financial limit, visibility, expiry, revocation, evidence)]';
 COMMENT ON COLUMN guest.delegated_authority.guest_id IS 'the guest whose affairs are delegated';
 COMMENT ON COLUMN guest.delegated_authority.property_ids IS 'NULL = every property of the tenant';
 COMMENT ON COLUMN guest.delegated_authority.information_visibility IS 'there is deliberately no level that includes intake or treatment notes';
@@ -301,7 +209,7 @@ CREATE TABLE guest.consent_record (
     CONSTRAINT consent_record_status_known CHECK (status IN ('Active', 'Revoked', 'Expired')),
     CONSTRAINT consent_record_revocation_complete CHECK ((status = 'Revoked') = (revoked_at IS NOT NULL))
 );
-COMMENT ON TABLE guest.consent_record IS 'Consent evidence is immutable once written; only revocation may change afterwards (trigger-enforced). [§24 Privacy purpose/consent; DEC-008; IDN-004 guardian consent]';
+COMMENT ON TABLE guest.consent_record IS 'Consent evidence is immutable once written; only revocation may change afterwards (trigger-enforced). An SMS STOP or unsubscribe is a revocation. [§24 Privacy purpose/consent; DEC-008; IDN-004 guardian consent]';
 COMMENT ON COLUMN guest.consent_record.granted_by_guest_id IS 'guardian granting for a minor';
 
 CREATE TABLE guest.privacy_request (
@@ -362,7 +270,6 @@ CREATE TABLE guest.guest_magic_link (
     CONSTRAINT guest_magic_link_token_uq UNIQUE (token_hash)
 );
 COMMENT ON TABLE guest.guest_magic_link IS 'Only the SHA-256 of the token is stored. Single use: guest.resolve_magic_link consumes it atomically. [SEC-010 (signed, short-lived, revocable, purpose-limited); SEC-011]';
-COMMENT ON COLUMN guest.guest_magic_link.guest_contact_point_id IS 'the verified contact the link was sent to';
 
 ALTER TABLE guest.guest ADD CONSTRAINT guest_principal_id_fk FOREIGN KEY (tenant_id, principal_id) REFERENCES core.principal (tenant_id, principal_id) ON DELETE RESTRICT;
 CREATE INDEX guest_principal_id_ix ON guest.guest (tenant_id, principal_id);
@@ -374,40 +281,22 @@ ALTER TABLE guest.guest ADD CONSTRAINT guest_tenant_fk FOREIGN KEY (tenant_id) R
 ALTER TABLE guest.guest_contact_point ADD CONSTRAINT guest_contact_point_guest_id_fk FOREIGN KEY (tenant_id, guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
 CREATE INDEX guest_contact_point_guest_id_ix ON guest.guest_contact_point (tenant_id, guest_id);
 ALTER TABLE guest.guest_contact_point ADD CONSTRAINT guest_contact_point_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE guest.guest_household ADD CONSTRAINT guest_household_primary_guest_id_fk FOREIGN KEY (tenant_id, primary_guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
-CREATE INDEX guest_household_primary_guest_id_ix ON guest.guest_household (tenant_id, primary_guest_id);
-ALTER TABLE guest.guest_household ADD CONSTRAINT guest_household_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE guest.guest_household_member ADD CONSTRAINT guest_household_member_guest_household_id_fk FOREIGN KEY (tenant_id, guest_household_id) REFERENCES guest.guest_household (tenant_id, guest_household_id) ON DELETE RESTRICT;
-CREATE INDEX guest_household_member_guest_household_id_ix ON guest.guest_household_member (tenant_id, guest_household_id);
-ALTER TABLE guest.guest_household_member ADD CONSTRAINT guest_household_member_guest_id_fk FOREIGN KEY (tenant_id, guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
-CREATE INDEX guest_household_member_guest_id_ix ON guest.guest_household_member (tenant_id, guest_id);
-ALTER TABLE guest.guest_household_member ADD CONSTRAINT guest_household_member_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE guest.guest_relationship ADD CONSTRAINT guest_relationship_guest_id_fk FOREIGN KEY (tenant_id, guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
 CREATE INDEX guest_relationship_guest_id_ix ON guest.guest_relationship (tenant_id, guest_id);
 ALTER TABLE guest.guest_relationship ADD CONSTRAINT guest_relationship_related_guest_id_fk FOREIGN KEY (tenant_id, related_guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
 CREATE INDEX guest_relationship_related_guest_id_ix ON guest.guest_relationship (tenant_id, related_guest_id);
 ALTER TABLE guest.guest_relationship ADD CONSTRAINT guest_relationship_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE guest.guest_preference ADD CONSTRAINT guest_preference_guest_id_fk FOREIGN KEY (tenant_id, guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
-CREATE INDEX guest_preference_guest_id_ix ON guest.guest_preference (tenant_id, guest_id);
-CREATE INDEX guest_preference_scope_ix ON guest.guest_preference (tenant_id, property_id);
-ALTER TABLE guest.guest_preference ADD CONSTRAINT guest_preference_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE guest.guest_preference ADD CONSTRAINT guest_preference_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
 ALTER TABLE guest.guest_merge_case ADD CONSTRAINT guest_merge_case_surviving_guest_id_fk FOREIGN KEY (tenant_id, surviving_guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
 CREATE INDEX guest_merge_case_surviving_guest_id_ix ON guest.guest_merge_case (tenant_id, surviving_guest_id);
 ALTER TABLE guest.guest_merge_case ADD CONSTRAINT guest_merge_case_duplicate_guest_id_fk FOREIGN KEY (tenant_id, duplicate_guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
 CREATE INDEX guest_merge_case_duplicate_guest_id_ix ON guest.guest_merge_case (tenant_id, duplicate_guest_id);
 ALTER TABLE guest.guest_merge_case ADD CONSTRAINT guest_merge_case_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE guest.privacy_alias ADD CONSTRAINT privacy_alias_guest_id_fk FOREIGN KEY (tenant_id, guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
-CREATE INDEX privacy_alias_guest_id_ix ON guest.privacy_alias (tenant_id, guest_id);
-ALTER TABLE guest.privacy_alias ADD CONSTRAINT privacy_alias_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE guest.delegated_authority ADD CONSTRAINT delegated_authority_guest_id_fk FOREIGN KEY (tenant_id, guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
 CREATE INDEX delegated_authority_guest_id_ix ON guest.delegated_authority (tenant_id, guest_id);
 ALTER TABLE guest.delegated_authority ADD CONSTRAINT delegated_authority_delegate_guest_id_fk FOREIGN KEY (tenant_id, delegate_guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
 CREATE INDEX delegated_authority_delegate_guest_id_ix ON guest.delegated_authority (tenant_id, delegate_guest_id);
 ALTER TABLE guest.delegated_authority ADD CONSTRAINT delegated_authority_delegate_principal_id_fk FOREIGN KEY (tenant_id, delegate_principal_id) REFERENCES core.principal (tenant_id, principal_id) ON DELETE RESTRICT;
 CREATE INDEX delegated_authority_delegate_principal_id_ix ON guest.delegated_authority (tenant_id, delegate_principal_id);
-ALTER TABLE guest.delegated_authority ADD CONSTRAINT delegated_authority_guest_relationship_id_fk FOREIGN KEY (tenant_id, guest_relationship_id) REFERENCES guest.guest_relationship (tenant_id, guest_relationship_id) ON DELETE RESTRICT;
-CREATE INDEX delegated_authority_guest_relationship_id_ix ON guest.delegated_authority (tenant_id, guest_relationship_id);
 ALTER TABLE guest.delegated_authority ADD CONSTRAINT delegated_authority_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE guest.consent_record ADD CONSTRAINT consent_record_guest_id_fk FOREIGN KEY (tenant_id, guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
 CREATE INDEX consent_record_guest_id_ix ON guest.consent_record (tenant_id, guest_id);
@@ -429,25 +318,21 @@ ALTER TABLE guest.guest_magic_link ADD CONSTRAINT guest_magic_link_tenant_fk FOR
 
 CREATE TRIGGER guest_touch BEFORE UPDATE ON guest.guest FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER guest_contact_point_touch BEFORE UPDATE ON guest.guest_contact_point FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER guest_household_touch BEFORE UPDATE ON guest.guest_household FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER guest_household_member_touch BEFORE UPDATE ON guest.guest_household_member FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER guest_relationship_touch BEFORE UPDATE ON guest.guest_relationship FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER guest_preference_touch BEFORE UPDATE ON guest.guest_preference FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER guest_merge_case_touch BEFORE UPDATE ON guest.guest_merge_case FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER privacy_alias_touch BEFORE UPDATE ON guest.privacy_alias FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER delegated_authority_touch BEFORE UPDATE ON guest.delegated_authority FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER consent_record_touch BEFORE UPDATE ON guest.consent_record FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER privacy_request_touch BEFORE UPDATE ON guest.privacy_request FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER guest_magic_link_touch BEFORE UPDATE ON guest.guest_magic_link FOR EACH ROW EXECUTE FUNCTION core.touch();
 CREATE INDEX guest_name_trgm_ix ON guest.guest USING gin ((coalesce(legal_last_name, '') || ' ' || coalesce(legal_first_name, '') || ' ' || coalesce(preferred_name, '')) gin_trgm_ops) WHERE status IN ('Active', 'Restricted');
-CREATE INDEX guest_contact_point_lookup_ix ON guest.guest_contact_point (tenant_id, contact_type, lookup_hash) WHERE status = 'Active';
+CREATE UNIQUE INDEX guest_public_queue_id_uq ON guest.guest (tenant_id, public_queue_id) WHERE public_queue_id IS NOT NULL;
+CREATE INDEX guest_contact_point_lookup_ix ON guest.guest_contact_point (tenant_id, contact_type, lookup_hash) WHERE status <> 'Retired';
 CREATE UNIQUE INDEX guest_contact_point_primary_uq ON guest.guest_contact_point (tenant_id, guest_id, contact_type) WHERE is_primary AND status = 'Active';
 
 ALTER TABLE guest.guest_relationship ADD CONSTRAINT guest_relationship_no_overlap
     EXCLUDE USING gist (tenant_id WITH =, guest_id WITH =, related_guest_id WITH =, relationship_type WITH =,
                         tstzrange(effective_from, coalesce(effective_to, 'infinity'), '[)') WITH &&)
     WHERE (status = 'Active');
-CREATE UNIQUE INDEX privacy_alias_value_uq ON guest.privacy_alias (tenant_id, alias_type, alias_value) WHERE status = 'Active';
 CREATE INDEX consent_record_purpose_ix ON guest.consent_record (tenant_id, guest_id, purpose, channel) WHERE status = 'Active';
 
 CREATE FUNCTION guest.consent_record_immutable() RETURNS trigger LANGUAGE plpgsql AS $$

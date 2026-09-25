@@ -3,14 +3,52 @@
 
 CREATE SCHEMA IF NOT EXISTS scheduling AUTHORIZATION spms_owner;
 
+CREATE TABLE scheduling.visit (
+    visit_id                       uuid NOT NULL DEFAULT core.uuid_v7(),
+    tenant_id                      uuid NOT NULL,
+    property_id                    uuid NOT NULL,
+    visit_type                     text NOT NULL,
+    primary_guest_id               uuid NOT NULL,
+    visit_date                     date NOT NULL,
+    operating_mode                 text NOT NULL,
+    pms_stay_reference             text,
+    scheduled_arrival_at           timestamptz,
+    actual_arrival_at              timestamptz,
+    actual_departure_at            timestamptz,
+    closed_at                      timestamptz,
+    notes                          text,
+    status                         text NOT NULL DEFAULT 'Planned',
+    source_system                  text NOT NULL DEFAULT 'Spa',
+    source_key                     text,
+    version                        integer NOT NULL DEFAULT 1,
+    created_at                     timestamptz NOT NULL DEFAULT now(),
+    created_by                     uuid,
+    updated_at                     timestamptz NOT NULL DEFAULT now(),
+    updated_by                     uuid,
+    correlation_id                 text,
+    CONSTRAINT visit_pkey PRIMARY KEY (visit_id),
+    CONSTRAINT visit_visit_type_ck CHECK (visit_type IN ('DayGuest', 'HotelGuest', 'Member', 'Group', 'WalkIn')),
+    CONSTRAINT visit_operating_mode_ck CHECK (operating_mode IN ('Standalone', 'MarqueeIntegrated')),
+    CONSTRAINT visit_version_ck CHECK (version >= 1),
+    CONSTRAINT visit_tenant_identity_uq UNIQUE (tenant_id, visit_id),
+    CONSTRAINT visit_prop_ref_uq UNIQUE (tenant_id, property_id, visit_id),
+    CONSTRAINT visit_status_known CHECK (status IN ('Planned', 'Arrived', 'InProgress', 'Closed', 'Cancelled', 'NoShow')),
+    CONSTRAINT visit_closed_complete CHECK ((status = 'Closed') = (closed_at IS NOT NULL))
+);
+COMMENT ON TABLE scheduling.visit IS 'A party''s day at the spa: planned (the itinerary), then arrived, then closed. Appointments belong to it. [§53.2 check-in; GOLDEN_GUEST_JOURNEY; operating modes]';
+COMMENT ON COLUMN scheduling.visit.operating_mode IS 'frozen at creation: the mode this visit is operated under';
+
 CREATE TABLE scheduling.appointment (
     appointment_id                 uuid NOT NULL DEFAULT core.uuid_v7(),
     tenant_id                      uuid NOT NULL,
     property_id                    uuid NOT NULL,
     confirmation_number            text,
+    visit_id                       uuid,
     guest_id                       uuid NOT NULL,
     service_id                     uuid NOT NULL,
-    service_version_id             uuid NOT NULL,
+    provider_id                    uuid,
+    room_id                        uuid,
+    guest_requested_provider       boolean NOT NULL DEFAULT false,
     duration_minutes               integer NOT NULL,
     start_at                       timestamptz NOT NULL,
     end_at                         timestamptz NOT NULL,
@@ -18,10 +56,14 @@ CREATE TABLE scheduling.appointment (
     source                         text NOT NULL,
     price_minor                    bigint NOT NULL DEFAULT 0,
     currency_code                  char(3) NOT NULL,
+    options                        jsonb NOT NULL DEFAULT '[]',
+    hold_expires_at                timestamptz,
+    checked_in_at                  timestamptz,
+    intake_acknowledged_at         timestamptz,
     cancellation_reason_code       text,
     cancelled_at                   timestamptz,
     completed_at                   timestamptz,
-    status                         text NOT NULL DEFAULT 'Draft',
+    status                         text NOT NULL DEFAULT 'Held',
     source_system                  text NOT NULL DEFAULT 'Spa',
     source_key                     text,
     version                        integer NOT NULL DEFAULT 1,
@@ -35,184 +77,23 @@ CREATE TABLE scheduling.appointment (
     CONSTRAINT appointment_source_ck CHECK (source IN ('Desk', 'Online', 'Mobile', 'Phone', 'ProviderTablet', 'Marquee', 'Import')),
     CONSTRAINT appointment_price_minor_ck CHECK (price_minor >= 0),
     CONSTRAINT appointment_currency_code_ck CHECK (currency_code ~ '^[A-Z]{3}$'),
+    CONSTRAINT appointment_options_ck CHECK (jsonb_typeof(options) = 'array'),
     CONSTRAINT appointment_version_ck CHECK (version >= 1),
     CONSTRAINT appointment_tenant_identity_uq UNIQUE (tenant_id, appointment_id),
     CONSTRAINT appointment_prop_ref_uq UNIQUE (tenant_id, property_id, appointment_id),
-    CONSTRAINT appointment_status_known CHECK (status IN ('Draft', 'Held', 'Confirmed', 'CheckedIn', 'Ready', 'InService', 'Completed', 'Cancelled', 'NoShow')),
+    CONSTRAINT appointment_status_known CHECK (status IN ('Held', 'Confirmed', 'CheckedIn', 'Ready', 'InService', 'Completed', 'Cancelled', 'NoShow')),
     CONSTRAINT appointment_interval_forward CHECK (end_at > start_at),
+    CONSTRAINT appointment_hold_expires CHECK ((status = 'Held') = (hold_expires_at IS NOT NULL)),
     CONSTRAINT appointment_cancel_complete CHECK ((status = 'Cancelled') = (cancelled_at IS NOT NULL)),
     CONSTRAINT appointment_complete_complete CHECK ((status = 'Completed') = (completed_at IS NOT NULL))
 );
-COMMENT ON TABLE scheduling.appointment IS 'One booked treatment slot. Who and where live in appointment_resource_assignment; CON-002 is enforced there by an exclusion constraint. [§53.2 Scheduling, Booking; DEC-002 (Spa is authoritative for appointments); DEC-005]';
+COMMENT ON TABLE scheduling.appointment IS 'One guest''s treatment in one room with one provider. Held = the online slot hold (expires_at). [§53.2 Scheduling, Booking; DEC-002; DEC-005; CON-001/002/005]';
 COMMENT ON COLUMN scheduling.appointment.confirmation_number IS 'guest-facing, quoted at the desk; unique per tenant';
-COMMENT ON COLUMN scheduling.appointment.guest_id IS 'primary guest / booking holder';
-COMMENT ON COLUMN scheduling.appointment.service_version_id IS 'what was booked, frozen';
+COMMENT ON COLUMN scheduling.appointment.guest_id IS 'the attendee';
+COMMENT ON COLUMN scheduling.appointment.duration_minutes IS 'frozen from the service at booking';
 COMMENT ON COLUMN scheduling.appointment.end_at IS 'maintained by trigger from start_at + duration_minutes';
-COMMENT ON COLUMN scheduling.appointment.entered_timezone IS 'zone the operator or guest entered the time in';
-
-CREATE TABLE scheduling.appointment_resource_assignment (
-    appointment_resource_assignment_id uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    appointment_id                 uuid NOT NULL,
-    assignment_role                text NOT NULL,
-    staff_id                       uuid,
-    resource_id                    uuid,
-    starts_at                      timestamptz NOT NULL,
-    ends_at                        timestamptz NOT NULL,
-    guest_requested                boolean NOT NULL DEFAULT false,
-    status                         text NOT NULL DEFAULT 'Active',
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT appointment_resource_assignment_pkey PRIMARY KEY (appointment_resource_assignment_id),
-    CONSTRAINT appointment_resource_assignment_assignment_role_ck CHECK (assignment_role IN ('Provider', 'Room', 'Equipment')),
-    CONSTRAINT appointment_resource_assignment_tenant_identity_uq UNIQUE (tenant_id, appointment_resource_assignment_id),
-    CONSTRAINT appointment_resource_assignment_status_known CHECK (status IN ('Active', 'Released')),
-    CONSTRAINT appointment_resource_assignment_range_forward CHECK (ends_at > starts_at),
-    CONSTRAINT appointment_resource_assignment_role_target CHECK ((assignment_role = 'Provider' AND staff_id IS NOT NULL AND resource_id IS NULL) OR (assignment_role IN ('Room', 'Equipment') AND resource_id IS NOT NULL AND staff_id IS NULL))
-);
-COMMENT ON TABLE scheduling.appointment_resource_assignment IS 'Who and what an appointment occupies, and when. Rooms and equipment cannot overlap (database-enforced). Provider overlap is soft and overridable, so it is indexed, not constrained. [CON-001 (provider, soft) and CON-002 (room/equipment, hard); SCH reassign]';
-COMMENT ON COLUMN scheduling.appointment_resource_assignment.guest_requested IS 'a requested provider changes the reassign rules';
-
-CREATE TABLE scheduling.appointment_line (
-    appointment_line_id            uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    appointment_id                 uuid NOT NULL,
-    line_number                    smallint NOT NULL,
-    line_type                      text NOT NULL,
-    service_id                     uuid,
-    service_option_rule_id         uuid,
-    description                    text NOT NULL,
-    quantity                       numeric(18,6) NOT NULL DEFAULT 1,
-    unit_price_minor               bigint NOT NULL,
-    currency_code                  char(3) NOT NULL,
-    line_total_minor               bigint GENERATED ALWAYS AS (round(quantity * unit_price_minor)::bigint) STORED NOT NULL,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT appointment_line_pkey PRIMARY KEY (appointment_line_id),
-    CONSTRAINT appointment_line_line_number_ck CHECK (line_number >= 1),
-    CONSTRAINT appointment_line_line_type_ck CHECK (line_type IN ('Service', 'Option', 'AddOn', 'Fee', 'Discount')),
-    CONSTRAINT appointment_line_quantity_ck CHECK (quantity > 0),
-    CONSTRAINT appointment_line_currency_code_ck CHECK (currency_code ~ '^[A-Z]{3}$'),
-    CONSTRAINT appointment_line_tenant_identity_uq UNIQUE (tenant_id, appointment_line_id),
-    CONSTRAINT appointment_line_number_uq UNIQUE (tenant_id, appointment_id, line_number)
-);
-COMMENT ON TABLE scheduling.appointment_line IS 'Priced content of an appointment: the service and its options/add-ons. Times live on the appointment. [§Numbers and six decimal places (line rounds quantity x integer unit price to minor units)]';
-
-CREATE TABLE scheduling.appointment_participant (
-    appointment_participant_id     uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    appointment_id                 uuid NOT NULL,
-    guest_id                       uuid NOT NULL,
-    participant_role               text NOT NULL,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT appointment_participant_pkey PRIMARY KEY (appointment_participant_id),
-    CONSTRAINT appointment_participant_participant_role_ck CHECK (participant_role IN ('Primary', 'Companion', 'Minor', 'Guardian')),
-    CONSTRAINT appointment_participant_tenant_identity_uq UNIQUE (tenant_id, appointment_participant_id),
-    CONSTRAINT appointment_participant_guest_uq UNIQUE (tenant_id, appointment_id, guest_id)
-);
-
-CREATE TABLE scheduling.appointment_status_history (
-    appointment_status_history_id  uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    appointment_id                 uuid NOT NULL,
-    from_status                    text,
-    to_status                      text NOT NULL,
-    reason_code                    text,
-    reason_text                    text,
-    override_conflict_codes        text[] NOT NULL DEFAULT '{}',
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT appointment_status_history_pkey PRIMARY KEY (appointment_status_history_id),
-    CONSTRAINT appointment_status_history_to_status_ck CHECK (to_status IN ('Draft', 'Held', 'Confirmed', 'CheckedIn', 'Ready', 'InService', 'Completed', 'Cancelled', 'NoShow')),
-    CONSTRAINT appointment_status_history_tenant_identity_uq UNIQUE (tenant_id, appointment_status_history_id)
-);
-
-CREATE TABLE scheduling.appointment_itinerary (
-    appointment_itinerary_id       uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    guest_id                       uuid NOT NULL,
-    itinerary_date                 date NOT NULL,
-    notes                          text,
-    status                         text NOT NULL DEFAULT 'Draft',
-    source_system                  text NOT NULL DEFAULT 'Spa',
-    source_key                     text,
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT appointment_itinerary_pkey PRIMARY KEY (appointment_itinerary_id),
-    CONSTRAINT appointment_itinerary_version_ck CHECK (version >= 1),
-    CONSTRAINT appointment_itinerary_tenant_identity_uq UNIQUE (tenant_id, appointment_itinerary_id),
-    CONSTRAINT appointment_itinerary_prop_ref_uq UNIQUE (tenant_id, property_id, appointment_itinerary_id),
-    CONSTRAINT appointment_itinerary_status_known CHECK (status IN ('Draft', 'Confirmed', 'Completed', 'Cancelled'))
-);
-COMMENT ON TABLE scheduling.appointment_itinerary IS 'A guest''s day: several appointments in sequence.';
-
-CREATE TABLE scheduling.appointment_itinerary_link (
-    appointment_itinerary_link_id  uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    appointment_itinerary_id       uuid NOT NULL,
-    appointment_id                 uuid NOT NULL,
-    sequence_number                smallint NOT NULL,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT appointment_itinerary_link_pkey PRIMARY KEY (appointment_itinerary_link_id),
-    CONSTRAINT appointment_itinerary_link_sequence_number_ck CHECK (sequence_number >= 1),
-    CONSTRAINT appointment_itinerary_link_tenant_identity_uq UNIQUE (tenant_id, appointment_itinerary_link_id),
-    CONSTRAINT appointment_itinerary_link_appointment_uq UNIQUE (tenant_id, appointment_id),
-    CONSTRAINT appointment_itinerary_link_sequence_uq UNIQUE (tenant_id, appointment_itinerary_id, sequence_number)
-);
-
-CREATE TABLE scheduling.availability_hold (
-    hold_id                        uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    slot_token_hash                char(64) NOT NULL,
-    guest_id                       uuid,
-    service_id                     uuid NOT NULL,
-    start_at                       timestamptz NOT NULL,
-    end_at                         timestamptz NOT NULL,
-    resource_snapshot              jsonb NOT NULL,
-    expires_at                     timestamptz NOT NULL,
-    idempotency_key                text NOT NULL,
-    appointment_id                 uuid,
-    status                         text NOT NULL DEFAULT 'Active',
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT availability_hold_pkey PRIMARY KEY (hold_id),
-    CONSTRAINT availability_hold_tenant_identity_uq UNIQUE (tenant_id, hold_id),
-    CONSTRAINT availability_hold_status_known CHECK (status IN ('Active', 'Converted', 'Expired', 'Released')),
-    CONSTRAINT availability_hold_range_forward CHECK (end_at > start_at),
-    CONSTRAINT availability_hold_converted_has_appointment CHECK ((status = 'Converted') = (appointment_id IS NOT NULL)),
-    CONSTRAINT availability_hold_token_uq UNIQUE (slot_token_hash),
-    CONSTRAINT availability_hold_idempotency_uq UNIQUE (tenant_id, property_id, idempotency_key)
-);
-COMMENT ON TABLE scheduling.availability_hold IS 'Short-lived slot token from availability search. It does not block CON-002: conversion to a Held appointment is what occupies the room. [§Booking transaction; online slot hold]';
+COMMENT ON COLUMN scheduling.appointment.price_minor IS 'frozen at booking';
+COMMENT ON COLUMN scheduling.appointment.options IS 'chosen add-ons, frozen: [{option_code, quantity, price_delta_minor, duration_delta_minutes}]';
 
 CREATE TABLE scheduling.schedule_change_proposal (
     schedule_change_proposal_id    uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -222,9 +103,10 @@ CREATE TABLE scheduling.schedule_change_proposal (
     token_hash                     char(64) NOT NULL,
     proposed_start                 timestamptz NOT NULL,
     proposed_end                   timestamptz NOT NULL,
-    proposed_staff_id              uuid,
-    proposed_resource_id           uuid,
+    proposed_provider_id           uuid,
+    proposed_room_id               uuid,
     from_version                   integer NOT NULL,
+    conflicts                      jsonb NOT NULL DEFAULT '[]',
     reason_code                    text,
     override_reason                text,
     expires_at                     timestamptz NOT NULL,
@@ -238,41 +120,17 @@ CREATE TABLE scheduling.schedule_change_proposal (
     updated_by                     uuid,
     correlation_id                 text,
     CONSTRAINT schedule_change_proposal_pkey PRIMARY KEY (schedule_change_proposal_id),
+    CONSTRAINT schedule_change_proposal_conflicts_ck CHECK (jsonb_typeof(conflicts) = 'array'),
     CONSTRAINT schedule_change_proposal_version_ck CHECK (version >= 1),
     CONSTRAINT schedule_change_proposal_tenant_identity_uq UNIQUE (tenant_id, schedule_change_proposal_id),
-    CONSTRAINT schedule_change_proposal_prop_ref_uq UNIQUE (tenant_id, property_id, schedule_change_proposal_id),
     CONSTRAINT schedule_change_proposal_status_known CHECK (status IN ('Open', 'Committed', 'Expired', 'Rejected', 'Superseded')),
     CONSTRAINT schedule_change_proposal_range_forward CHECK (proposed_end > proposed_start),
     CONSTRAINT schedule_change_proposal_committed_complete CHECK ((status = 'Committed') = (committed_at IS NOT NULL)),
     CONSTRAINT schedule_change_proposal_token_uq UNIQUE (token_hash)
 );
 COMMENT ON TABLE scheduling.schedule_change_proposal IS 'A preflight: what the operator was shown and agreed to. Single use; commit re-evaluates and compares. [SCH-020 / GUI-003 preflight; CON-006 undo window]';
+COMMENT ON COLUMN scheduling.schedule_change_proposal.conflicts IS 'as shown: [{code: ''CON-001'', severity: ''Soft'', subject, override_allowed, overridden}]';
 COMMENT ON COLUMN scheduling.schedule_change_proposal.undo_until IS 'CON-006 undo window end';
-
-CREATE TABLE scheduling.conflict_result (
-    conflict_result_id             uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    schedule_change_proposal_id    uuid NOT NULL,
-    conflict_code                  text NOT NULL,
-    severity                       text NOT NULL,
-    subject_type                   text NOT NULL,
-    subject_id                     uuid,
-    detail                         jsonb NOT NULL DEFAULT '{}',
-    override_allowed               boolean NOT NULL,
-    overridden                     boolean NOT NULL DEFAULT false,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT conflict_result_pkey PRIMARY KEY (conflict_result_id),
-    CONSTRAINT conflict_result_conflict_code_ck CHECK (conflict_code ~ '^CON-[0-9]{3}$'),
-    CONSTRAINT conflict_result_severity_ck CHECK (severity IN ('Soft', 'Hard')),
-    CONSTRAINT conflict_result_tenant_identity_uq UNIQUE (tenant_id, conflict_result_id),
-    CONSTRAINT conflict_result_hard_not_overridable CHECK (severity = 'Soft' OR (NOT override_allowed AND NOT overridden)),
-    CONSTRAINT conflict_result_override_permitted CHECK (NOT overridden OR override_allowed)
-);
 
 CREATE TABLE scheduling.waitlist_entry (
     waitlist_id                    uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -281,9 +139,7 @@ CREATE TABLE scheduling.waitlist_entry (
     guest_id                       uuid NOT NULL,
     service_id                     uuid,
     criteria                       jsonb NOT NULL,
-    priority_rule_version          text NOT NULL,
     expires_at                     timestamptz,
-    offered_at                     timestamptz,
     offer_expires_at               timestamptz,
     accepted_appointment_id        uuid,
     status                         text NOT NULL DEFAULT 'Waiting',
@@ -309,7 +165,8 @@ CREATE TABLE scheduling.turnaround_task (
     task_type                      text NOT NULL,
     due_at                         timestamptz NOT NULL,
     assigned_staff_id              uuid,
-    started_at                     timestamptz,
+    checklist_code                 text,
+    result                         text,
     completed_at                   timestamptz,
     status                         text NOT NULL DEFAULT 'Pending',
     version                        integer NOT NULL DEFAULT 1,
@@ -319,78 +176,66 @@ CREATE TABLE scheduling.turnaround_task (
     updated_by                     uuid,
     correlation_id                 text,
     CONSTRAINT turnaround_task_pkey PRIMARY KEY (turnaround_task_id),
-    CONSTRAINT turnaround_task_task_type_ck CHECK (task_type IN ('Turnover', 'DeepClean', 'Restock')),
+    CONSTRAINT turnaround_task_task_type_ck CHECK (task_type IN ('Turnover', 'DeepClean', 'Sanitation', 'Restock')),
+    CONSTRAINT turnaround_task_result_ck CHECK (result IN ('Pass', 'Fail', 'NeedsAttention')),
     CONSTRAINT turnaround_task_version_ck CHECK (version >= 1),
     CONSTRAINT turnaround_task_tenant_identity_uq UNIQUE (tenant_id, turnaround_task_id),
     CONSTRAINT turnaround_task_status_known CHECK (status IN ('Pending', 'InProgress', 'Completed', 'Skipped')),
-    CONSTRAINT turnaround_task_completed_complete CHECK ((status = 'Completed') = (completed_at IS NOT NULL))
+    CONSTRAINT turnaround_task_completed_complete CHECK ((status = 'Completed') = (completed_at IS NOT NULL AND result IS NOT NULL))
 );
 
+CREATE TABLE scheduling.visit_exception (
+    visit_exception_id             uuid NOT NULL DEFAULT core.uuid_v7(),
+    tenant_id                      uuid NOT NULL,
+    property_id                    uuid NOT NULL,
+    visit_id                       uuid NOT NULL,
+    appointment_id                 uuid,
+    exception_type                 text NOT NULL,
+    severity                       text NOT NULL,
+    resolved_at                    timestamptz,
+    resolved_by_staff_id           uuid,
+    resolution_note                text,
+    status                         text NOT NULL DEFAULT 'Open',
+    version                        integer NOT NULL DEFAULT 1,
+    created_at                     timestamptz NOT NULL DEFAULT now(),
+    created_by                     uuid,
+    updated_at                     timestamptz NOT NULL DEFAULT now(),
+    updated_by                     uuid,
+    correlation_id                 text,
+    CONSTRAINT visit_exception_pkey PRIMARY KEY (visit_exception_id),
+    CONSTRAINT visit_exception_exception_type_ck CHECK (exception_type IN ('PaymentOutstanding', 'IntakeIncomplete', 'IdentityMismatch', 'CredentialFailed', 'AccessFailed', 'ConsentMissing', 'Other')),
+    CONSTRAINT visit_exception_severity_ck CHECK (severity IN ('Info', 'Warning', 'Blocking')),
+    CONSTRAINT visit_exception_version_ck CHECK (version >= 1),
+    CONSTRAINT visit_exception_tenant_identity_uq UNIQUE (tenant_id, visit_exception_id),
+    CONSTRAINT visit_exception_status_known CHECK (status IN ('Open', 'Resolved', 'Waived')),
+    CONSTRAINT visit_exception_resolution_complete CHECK ((status = 'Open') = (resolved_at IS NULL))
+);
+COMMENT ON TABLE scheduling.visit_exception IS 'Kept typed: the exception center queries open items across the day. [OPERATIONS_EXCEPTION_CENTER]';
+
+ALTER TABLE scheduling.visit ADD CONSTRAINT visit_primary_guest_id_fk FOREIGN KEY (tenant_id, primary_guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
+CREATE INDEX visit_primary_guest_id_ix ON scheduling.visit (tenant_id, primary_guest_id);
+ALTER TABLE scheduling.visit ADD CONSTRAINT visit_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
+ALTER TABLE scheduling.visit ADD CONSTRAINT visit_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
+ALTER TABLE scheduling.appointment ADD CONSTRAINT appointment_visit_id_fk FOREIGN KEY (tenant_id, property_id, visit_id) REFERENCES scheduling.visit (tenant_id, property_id, visit_id) ON DELETE RESTRICT;
+CREATE INDEX appointment_visit_id_ix ON scheduling.appointment (tenant_id, property_id, visit_id);
 ALTER TABLE scheduling.appointment ADD CONSTRAINT appointment_guest_id_fk FOREIGN KEY (tenant_id, guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
 CREATE INDEX appointment_guest_id_ix ON scheduling.appointment (tenant_id, guest_id);
 ALTER TABLE scheduling.appointment ADD CONSTRAINT appointment_service_id_fk FOREIGN KEY (tenant_id, service_id) REFERENCES catalog.service (tenant_id, service_id) ON DELETE RESTRICT;
 CREATE INDEX appointment_service_id_ix ON scheduling.appointment (tenant_id, service_id);
-ALTER TABLE scheduling.appointment ADD CONSTRAINT appointment_service_version_id_fk FOREIGN KEY (tenant_id, service_version_id) REFERENCES catalog.service_version (tenant_id, service_version_id) ON DELETE RESTRICT;
-CREATE INDEX appointment_service_version_id_ix ON scheduling.appointment (tenant_id, service_version_id);
+ALTER TABLE scheduling.appointment ADD CONSTRAINT appointment_provider_id_fk FOREIGN KEY (tenant_id, provider_id) REFERENCES workforce.staff (tenant_id, staff_id) ON DELETE RESTRICT;
+CREATE INDEX appointment_provider_id_ix ON scheduling.appointment (tenant_id, provider_id);
+ALTER TABLE scheduling.appointment ADD CONSTRAINT appointment_room_id_fk FOREIGN KEY (tenant_id, property_id, room_id) REFERENCES resources.resource (tenant_id, property_id, resource_id) ON DELETE RESTRICT;
+CREATE INDEX appointment_room_id_ix ON scheduling.appointment (tenant_id, property_id, room_id);
 ALTER TABLE scheduling.appointment ADD CONSTRAINT appointment_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE scheduling.appointment ADD CONSTRAINT appointment_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE scheduling.appointment_resource_assignment ADD CONSTRAINT appointment_resource_assignment_appointment_id_fk FOREIGN KEY (tenant_id, property_id, appointment_id) REFERENCES scheduling.appointment (tenant_id, property_id, appointment_id) ON DELETE RESTRICT;
-CREATE INDEX appointment_resource_assignment_appointment_id_ix ON scheduling.appointment_resource_assignment (tenant_id, property_id, appointment_id);
-ALTER TABLE scheduling.appointment_resource_assignment ADD CONSTRAINT appointment_resource_assignment_staff_id_fk FOREIGN KEY (tenant_id, staff_id) REFERENCES workforce.staff (tenant_id, staff_id) ON DELETE RESTRICT;
-CREATE INDEX appointment_resource_assignment_staff_id_ix ON scheduling.appointment_resource_assignment (tenant_id, staff_id);
-ALTER TABLE scheduling.appointment_resource_assignment ADD CONSTRAINT appointment_resource_assignment_resource_id_fk FOREIGN KEY (tenant_id, property_id, resource_id) REFERENCES resources.resource (tenant_id, property_id, resource_id) ON DELETE RESTRICT;
-CREATE INDEX appointment_resource_assignment_resource_id_ix ON scheduling.appointment_resource_assignment (tenant_id, property_id, resource_id);
-ALTER TABLE scheduling.appointment_resource_assignment ADD CONSTRAINT appointment_resource_assignment_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE scheduling.appointment_resource_assignment ADD CONSTRAINT appointment_resource_assignment_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE scheduling.appointment_line ADD CONSTRAINT appointment_line_appointment_id_fk FOREIGN KEY (tenant_id, property_id, appointment_id) REFERENCES scheduling.appointment (tenant_id, property_id, appointment_id) ON DELETE RESTRICT;
-CREATE INDEX appointment_line_appointment_id_ix ON scheduling.appointment_line (tenant_id, property_id, appointment_id);
-ALTER TABLE scheduling.appointment_line ADD CONSTRAINT appointment_line_service_id_fk FOREIGN KEY (tenant_id, service_id) REFERENCES catalog.service (tenant_id, service_id) ON DELETE RESTRICT;
-CREATE INDEX appointment_line_service_id_ix ON scheduling.appointment_line (tenant_id, service_id);
-ALTER TABLE scheduling.appointment_line ADD CONSTRAINT appointment_line_service_option_rule_id_fk FOREIGN KEY (tenant_id, service_option_rule_id) REFERENCES catalog.service_option_rule (tenant_id, service_option_rule_id) ON DELETE RESTRICT;
-CREATE INDEX appointment_line_service_option_rule_id_ix ON scheduling.appointment_line (tenant_id, service_option_rule_id);
-ALTER TABLE scheduling.appointment_line ADD CONSTRAINT appointment_line_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE scheduling.appointment_line ADD CONSTRAINT appointment_line_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE scheduling.appointment_participant ADD CONSTRAINT appointment_participant_appointment_id_fk FOREIGN KEY (tenant_id, property_id, appointment_id) REFERENCES scheduling.appointment (tenant_id, property_id, appointment_id) ON DELETE RESTRICT;
-CREATE INDEX appointment_participant_appointment_id_ix ON scheduling.appointment_participant (tenant_id, property_id, appointment_id);
-ALTER TABLE scheduling.appointment_participant ADD CONSTRAINT appointment_participant_guest_id_fk FOREIGN KEY (tenant_id, guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
-CREATE INDEX appointment_participant_guest_id_ix ON scheduling.appointment_participant (tenant_id, guest_id);
-ALTER TABLE scheduling.appointment_participant ADD CONSTRAINT appointment_participant_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE scheduling.appointment_participant ADD CONSTRAINT appointment_participant_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE scheduling.appointment_status_history ADD CONSTRAINT appointment_status_history_appointment_id_fk FOREIGN KEY (tenant_id, property_id, appointment_id) REFERENCES scheduling.appointment (tenant_id, property_id, appointment_id) ON DELETE RESTRICT;
-CREATE INDEX appointment_status_history_appointment_id_ix ON scheduling.appointment_status_history (tenant_id, property_id, appointment_id);
-ALTER TABLE scheduling.appointment_status_history ADD CONSTRAINT appointment_status_history_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE scheduling.appointment_status_history ADD CONSTRAINT appointment_status_history_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE scheduling.appointment_itinerary ADD CONSTRAINT appointment_itinerary_guest_id_fk FOREIGN KEY (tenant_id, guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
-CREATE INDEX appointment_itinerary_guest_id_ix ON scheduling.appointment_itinerary (tenant_id, guest_id);
-CREATE INDEX appointment_itinerary_scope_ix ON scheduling.appointment_itinerary (tenant_id, property_id);
-ALTER TABLE scheduling.appointment_itinerary ADD CONSTRAINT appointment_itinerary_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE scheduling.appointment_itinerary ADD CONSTRAINT appointment_itinerary_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE scheduling.appointment_itinerary_link ADD CONSTRAINT appointment_itinerary_link_appointment_itinerary_id_fk FOREIGN KEY (tenant_id, property_id, appointment_itinerary_id) REFERENCES scheduling.appointment_itinerary (tenant_id, property_id, appointment_itinerary_id) ON DELETE RESTRICT;
-CREATE INDEX appointment_itinerary_link_appointment_itinerary_id_ix ON scheduling.appointment_itinerary_link (tenant_id, property_id, appointment_itinerary_id);
-ALTER TABLE scheduling.appointment_itinerary_link ADD CONSTRAINT appointment_itinerary_link_appointment_id_fk FOREIGN KEY (tenant_id, property_id, appointment_id) REFERENCES scheduling.appointment (tenant_id, property_id, appointment_id) ON DELETE RESTRICT;
-CREATE INDEX appointment_itinerary_link_appointment_id_ix ON scheduling.appointment_itinerary_link (tenant_id, property_id, appointment_id);
-ALTER TABLE scheduling.appointment_itinerary_link ADD CONSTRAINT appointment_itinerary_link_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE scheduling.appointment_itinerary_link ADD CONSTRAINT appointment_itinerary_link_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE scheduling.availability_hold ADD CONSTRAINT availability_hold_guest_id_fk FOREIGN KEY (tenant_id, guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
-CREATE INDEX availability_hold_guest_id_ix ON scheduling.availability_hold (tenant_id, guest_id);
-ALTER TABLE scheduling.availability_hold ADD CONSTRAINT availability_hold_service_id_fk FOREIGN KEY (tenant_id, service_id) REFERENCES catalog.service (tenant_id, service_id) ON DELETE RESTRICT;
-CREATE INDEX availability_hold_service_id_ix ON scheduling.availability_hold (tenant_id, service_id);
-ALTER TABLE scheduling.availability_hold ADD CONSTRAINT availability_hold_appointment_id_fk FOREIGN KEY (tenant_id, property_id, appointment_id) REFERENCES scheduling.appointment (tenant_id, property_id, appointment_id) ON DELETE RESTRICT;
-CREATE INDEX availability_hold_appointment_id_ix ON scheduling.availability_hold (tenant_id, property_id, appointment_id);
-ALTER TABLE scheduling.availability_hold ADD CONSTRAINT availability_hold_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE scheduling.availability_hold ADD CONSTRAINT availability_hold_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
 ALTER TABLE scheduling.schedule_change_proposal ADD CONSTRAINT schedule_change_proposal_appointment_id_fk FOREIGN KEY (tenant_id, property_id, appointment_id) REFERENCES scheduling.appointment (tenant_id, property_id, appointment_id) ON DELETE RESTRICT;
 CREATE INDEX schedule_change_proposal_appointment_id_ix ON scheduling.schedule_change_proposal (tenant_id, property_id, appointment_id);
-ALTER TABLE scheduling.schedule_change_proposal ADD CONSTRAINT schedule_change_proposal_proposed_staff_id_fk FOREIGN KEY (tenant_id, proposed_staff_id) REFERENCES workforce.staff (tenant_id, staff_id) ON DELETE RESTRICT;
-CREATE INDEX schedule_change_proposal_proposed_staff_id_ix ON scheduling.schedule_change_proposal (tenant_id, proposed_staff_id);
-ALTER TABLE scheduling.schedule_change_proposal ADD CONSTRAINT schedule_change_proposal_proposed_resource_id_fk FOREIGN KEY (tenant_id, property_id, proposed_resource_id) REFERENCES resources.resource (tenant_id, property_id, resource_id) ON DELETE RESTRICT;
-CREATE INDEX schedule_change_proposal_proposed_resource_id_ix ON scheduling.schedule_change_proposal (tenant_id, property_id, proposed_resource_id);
+ALTER TABLE scheduling.schedule_change_proposal ADD CONSTRAINT schedule_change_proposal_proposed_provider_id_fk FOREIGN KEY (tenant_id, proposed_provider_id) REFERENCES workforce.staff (tenant_id, staff_id) ON DELETE RESTRICT;
+CREATE INDEX schedule_change_proposal_proposed_provider_id_ix ON scheduling.schedule_change_proposal (tenant_id, proposed_provider_id);
+ALTER TABLE scheduling.schedule_change_proposal ADD CONSTRAINT schedule_change_proposal_proposed_room_id_fk FOREIGN KEY (tenant_id, property_id, proposed_room_id) REFERENCES resources.resource (tenant_id, property_id, resource_id) ON DELETE RESTRICT;
+CREATE INDEX schedule_change_proposal_proposed_room_id_ix ON scheduling.schedule_change_proposal (tenant_id, property_id, proposed_room_id);
 ALTER TABLE scheduling.schedule_change_proposal ADD CONSTRAINT schedule_change_proposal_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE scheduling.schedule_change_proposal ADD CONSTRAINT schedule_change_proposal_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE scheduling.conflict_result ADD CONSTRAINT conflict_result_schedule_change_proposal_id_fk FOREIGN KEY (tenant_id, property_id, schedule_change_proposal_id) REFERENCES scheduling.schedule_change_proposal (tenant_id, property_id, schedule_change_proposal_id) ON DELETE RESTRICT;
-CREATE INDEX conflict_result_schedule_change_proposal_id_ix ON scheduling.conflict_result (tenant_id, property_id, schedule_change_proposal_id);
-ALTER TABLE scheduling.conflict_result ADD CONSTRAINT conflict_result_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE scheduling.conflict_result ADD CONSTRAINT conflict_result_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
 ALTER TABLE scheduling.waitlist_entry ADD CONSTRAINT waitlist_entry_guest_id_fk FOREIGN KEY (tenant_id, guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
 CREATE INDEX waitlist_entry_guest_id_ix ON scheduling.waitlist_entry (tenant_id, guest_id);
 ALTER TABLE scheduling.waitlist_entry ADD CONSTRAINT waitlist_entry_service_id_fk FOREIGN KEY (tenant_id, service_id) REFERENCES catalog.service (tenant_id, service_id) ON DELETE RESTRICT;
@@ -407,26 +252,30 @@ ALTER TABLE scheduling.turnaround_task ADD CONSTRAINT turnaround_task_assigned_s
 CREATE INDEX turnaround_task_assigned_staff_id_ix ON scheduling.turnaround_task (tenant_id, assigned_staff_id);
 ALTER TABLE scheduling.turnaround_task ADD CONSTRAINT turnaround_task_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE scheduling.turnaround_task ADD CONSTRAINT turnaround_task_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
+ALTER TABLE scheduling.visit_exception ADD CONSTRAINT visit_exception_visit_id_fk FOREIGN KEY (tenant_id, property_id, visit_id) REFERENCES scheduling.visit (tenant_id, property_id, visit_id) ON DELETE RESTRICT;
+CREATE INDEX visit_exception_visit_id_ix ON scheduling.visit_exception (tenant_id, property_id, visit_id);
+ALTER TABLE scheduling.visit_exception ADD CONSTRAINT visit_exception_appointment_id_fk FOREIGN KEY (tenant_id, property_id, appointment_id) REFERENCES scheduling.appointment (tenant_id, property_id, appointment_id) ON DELETE RESTRICT;
+CREATE INDEX visit_exception_appointment_id_ix ON scheduling.visit_exception (tenant_id, property_id, appointment_id);
+ALTER TABLE scheduling.visit_exception ADD CONSTRAINT visit_exception_resolved_by_staff_id_fk FOREIGN KEY (tenant_id, resolved_by_staff_id) REFERENCES workforce.staff (tenant_id, staff_id) ON DELETE RESTRICT;
+CREATE INDEX visit_exception_resolved_by_staff_id_ix ON scheduling.visit_exception (tenant_id, resolved_by_staff_id);
+ALTER TABLE scheduling.visit_exception ADD CONSTRAINT visit_exception_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
+ALTER TABLE scheduling.visit_exception ADD CONSTRAINT visit_exception_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
 
+CREATE TRIGGER visit_touch BEFORE UPDATE ON scheduling.visit FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER appointment_touch BEFORE UPDATE ON scheduling.appointment FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER appointment_resource_assignment_touch BEFORE UPDATE ON scheduling.appointment_resource_assignment FOR EACH ROW EXECUTE FUNCTION core.touch();
-CREATE TRIGGER appointment_line_touch BEFORE UPDATE ON scheduling.appointment_line FOR EACH ROW EXECUTE FUNCTION core.touch();
-CREATE TRIGGER appointment_participant_touch BEFORE UPDATE ON scheduling.appointment_participant FOR EACH ROW EXECUTE FUNCTION core.touch();
-CREATE TRIGGER appointment_status_history_append_only BEFORE UPDATE OR DELETE ON scheduling.appointment_status_history FOR EACH ROW EXECUTE FUNCTION core.forbid_mutation();
-CREATE TRIGGER appointment_itinerary_touch BEFORE UPDATE ON scheduling.appointment_itinerary FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER appointment_itinerary_link_touch BEFORE UPDATE ON scheduling.appointment_itinerary_link FOR EACH ROW EXECUTE FUNCTION core.touch();
-CREATE TRIGGER availability_hold_touch BEFORE UPDATE ON scheduling.availability_hold FOR EACH ROW EXECUTE FUNCTION core.touch();
 CREATE TRIGGER schedule_change_proposal_touch BEFORE UPDATE ON scheduling.schedule_change_proposal FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER conflict_result_touch BEFORE UPDATE ON scheduling.conflict_result FOR EACH ROW EXECUTE FUNCTION core.touch();
 CREATE TRIGGER waitlist_entry_touch BEFORE UPDATE ON scheduling.waitlist_entry FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER turnaround_task_touch BEFORE UPDATE ON scheduling.turnaround_task FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
+CREATE TRIGGER visit_exception_touch BEFORE UPDATE ON scheduling.visit_exception FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
+CREATE INDEX visit_day_ix ON scheduling.visit (tenant_id, property_id, visit_date);
 CREATE UNIQUE INDEX appointment_confirmation_uq ON scheduling.appointment (tenant_id, confirmation_number) WHERE confirmation_number IS NOT NULL;
 CREATE INDEX appointment_board_ix ON scheduling.appointment USING gist (tenant_id, property_id, tstzrange(start_at, end_at, '[)'));
 CREATE INDEX appointment_guest_window_ix ON scheduling.appointment (tenant_id, guest_id, start_at) WHERE status NOT IN ('Cancelled', 'NoShow');
+CREATE INDEX appointment_provider_window_ix ON scheduling.appointment USING gist (tenant_id, provider_id, tstzrange(start_at, end_at, '[)')) WHERE provider_id IS NOT NULL AND status NOT IN ('Cancelled', 'NoShow');
+CREATE INDEX appointment_hold_expiry_ix ON scheduling.appointment (hold_expires_at) WHERE status = 'Held';
 
--- end_at is derived, never trusted from the caller: the exclusion constraint on
--- assignments indexes the same interval. Not a GENERATED column because
--- timestamptz + interval is STABLE, not IMMUTABLE.
+-- end_at is derived, never trusted from the caller: the room exclusion indexes it.
+-- Not a GENERATED column because timestamptz + interval is STABLE, not IMMUTABLE.
 CREATE FUNCTION scheduling.appointment_set_end_at() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     NEW.end_at := NEW.start_at + make_interval(mins => NEW.duration_minutes);
@@ -435,30 +284,17 @@ END $$;
 CREATE TRIGGER appointment_end_at BEFORE INSERT OR UPDATE OF start_at, duration_minutes, end_at
     ON scheduling.appointment FOR EACH ROW EXECUTE FUNCTION scheduling.appointment_set_end_at();
 
--- A cancelled or no-show appointment holds nothing: release its assignments in
--- the same statement, so the room is free the instant the status changes.
-CREATE FUNCTION scheduling.appointment_release_assignments() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-    IF NEW.status IN ('Cancelled', 'NoShow') AND OLD.status NOT IN ('Cancelled', 'NoShow') THEN
-        UPDATE scheduling.appointment_resource_assignment
-           SET status = 'Released'
-         WHERE tenant_id = NEW.tenant_id AND appointment_id = NEW.appointment_id AND status = 'Active';
-    END IF;
-    RETURN NEW;
-END $$;
-CREATE TRIGGER appointment_release_assignments AFTER UPDATE OF status ON scheduling.appointment
-    FOR EACH ROW EXECUTE FUNCTION scheduling.appointment_release_assignments();
-CREATE UNIQUE INDEX appointment_resource_assignment_one_room_uq ON scheduling.appointment_resource_assignment (tenant_id, appointment_id) WHERE assignment_role = 'Room' AND status = 'Active';
-CREATE INDEX appointment_resource_assignment_provider_window_ix ON scheduling.appointment_resource_assignment USING gist (tenant_id, staff_id, tstzrange(starts_at, ends_at, '[)')) WHERE assignment_role = 'Provider' AND status = 'Active';
-
--- CON-002, HARD: a room or piece of equipment cannot hold two bookings at once.
--- Violations raise SQLSTATE 23P01, which the adapter maps back to CON-002.
-ALTER TABLE scheduling.appointment_resource_assignment ADD CONSTRAINT appointment_resource_no_overlap
-    EXCLUDE USING gist (tenant_id WITH =, property_id WITH =, resource_id WITH =,
-                        tstzrange(starts_at, ends_at, '[)') WITH &&)
-    WHERE (resource_id IS NOT NULL AND status = 'Active');
-CREATE UNIQUE INDEX appointment_participant_one_primary_uq ON scheduling.appointment_participant (tenant_id, appointment_id) WHERE participant_role = 'Primary';
-CREATE INDEX appointment_status_history_appt_ix ON scheduling.appointment_status_history (tenant_id, appointment_id, created_at);
-CREATE INDEX availability_hold_expiry_ix ON scheduling.availability_hold (expires_at) WHERE status = 'Active';
+-- CON-002, HARD: a room cannot hold two treatments at once. Cancelled and no-show
+-- rows hold nothing. Violations raise SQLSTATE 23P01, mapped back to CON-002.
+-- CON-001 (provider overlap) is SOFT and overridable, so it is only indexed.
+ALTER TABLE scheduling.appointment ADD CONSTRAINT appointment_room_no_overlap
+    EXCLUDE USING gist (tenant_id WITH =, property_id WITH =, room_id WITH =,
+                        tstzrange(start_at, end_at, '[)') WITH &&)
+    WHERE (room_id IS NOT NULL AND status NOT IN ('Cancelled', 'NoShow'));
 CREATE INDEX schedule_change_proposal_expiry_ix ON scheduling.schedule_change_proposal (expires_at) WHERE status = 'Open';
+
+-- A hard conflict can never be recorded as overridden.
+ALTER TABLE scheduling.schedule_change_proposal ADD CONSTRAINT schedule_change_proposal_hard_not_overridden
+    CHECK (NOT jsonb_path_exists(conflicts, '$[*] ? (@.severity == "Hard" && @.overridden == true)'));
 CREATE INDEX turnaround_task_open_ix ON scheduling.turnaround_task (tenant_id, property_id, due_at) WHERE status IN ('Pending', 'InProgress');
+CREATE INDEX visit_exception_open_ix ON scheduling.visit_exception (tenant_id, property_id, severity) WHERE status = 'Open';

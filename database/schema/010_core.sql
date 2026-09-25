@@ -148,32 +148,7 @@ CREATE TABLE core.tenant (
     CONSTRAINT tenant_code_uq UNIQUE (code)
 );
 COMMENT ON TABLE core.tenant IS 'Tenant directory. RLS restricts it to the current tenant like every other table. [R0; §24 Tenancy; spec ''tenant directory itself now has RLS'']';
-COMMENT ON COLUMN core.tenant.data_region IS 'data residency region; decision register ''data residency per property''';
-
-CREATE TABLE core.department (
-    department_id                  uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid,
-    department_code                text NOT NULL,
-    department_name                text NOT NULL,
-    status                         text NOT NULL DEFAULT 'Active',
-    effective_from                 timestamptz NOT NULL DEFAULT now(),
-    effective_to                   timestamptz,
-    source_system                  text NOT NULL DEFAULT 'Spa',
-    source_key                     text,
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT department_pkey PRIMARY KEY (department_id),
-    CONSTRAINT department_version_ck CHECK (version >= 1),
-    CONSTRAINT department_tenant_identity_uq UNIQUE (tenant_id, department_id),
-    CONSTRAINT department_status_known CHECK (status IN ('Active', 'Retired')),
-    CONSTRAINT department_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
-    CONSTRAINT department_code_uq UNIQUE NULLS NOT DISTINCT (tenant_id, property_id, department_code)
-);
+COMMENT ON COLUMN core.tenant.data_region IS 'data residency region';
 
 CREATE TABLE core.property (
     property_id                    uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -184,6 +159,7 @@ CREATE TABLE core.property (
     currency_code                  char(3) NOT NULL,
     locale                         text NOT NULL DEFAULT 'en-US',
     operating_mode                 text NOT NULL DEFAULT 'Standalone',
+    opening_hours                  jsonb NOT NULL DEFAULT '[]',
     room_turnover_minutes          integer NOT NULL DEFAULT 15,
     provider_transition_minutes    integer NOT NULL DEFAULT 10,
     status                         text NOT NULL DEFAULT 'Active',
@@ -198,6 +174,7 @@ CREATE TABLE core.property (
     CONSTRAINT property_pkey PRIMARY KEY (property_id),
     CONSTRAINT property_currency_code_ck CHECK (currency_code ~ '^[A-Z]{3}$'),
     CONSTRAINT property_operating_mode_ck CHECK (operating_mode IN ('Standalone', 'MarqueeIntegrated')),
+    CONSTRAINT property_opening_hours_ck CHECK (jsonb_typeof(opening_hours) = 'array'),
     CONSTRAINT property_room_turnover_minutes_ck CHECK (room_turnover_minutes >= 0),
     CONSTRAINT property_provider_transition_minutes_ck CHECK (provider_transition_minutes >= 0),
     CONSTRAINT property_version_ck CHECK (version >= 1),
@@ -207,206 +184,7 @@ CREATE TABLE core.property (
 );
 COMMENT ON TABLE core.property IS 'A spa property. operating_mode is the default; capability_ownership decides per capability and time. [§53.2 Operating modes; DEC-001; DEC-011]';
 COMMENT ON COLUMN core.property.timezone IS 'IANA zone; the board and business day are always read in it';
-COMMENT ON COLUMN core.property.room_turnover_minutes IS 'default CON-002 turnover buffer; a property_service row may override';
-
-CREATE TABLE core.property_operating_hours (
-    property_operating_hours_id    uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    day_of_week                    smallint NOT NULL,
-    opens_at                       time NOT NULL,
-    closes_at                      time NOT NULL,
-    status                         text NOT NULL DEFAULT 'Active',
-    effective_from                 timestamptz NOT NULL DEFAULT now(),
-    effective_to                   timestamptz,
-    source_system                  text NOT NULL DEFAULT 'Spa',
-    source_key                     text,
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT property_operating_hours_pkey PRIMARY KEY (property_operating_hours_id),
-    CONSTRAINT property_operating_hours_day_of_week_ck CHECK (day_of_week BETWEEN 1 AND 7),
-    CONSTRAINT property_operating_hours_version_ck CHECK (version >= 1),
-    CONSTRAINT property_operating_hours_tenant_identity_uq UNIQUE (tenant_id, property_operating_hours_id),
-    CONSTRAINT property_operating_hours_status_known CHECK (status IN ('Active', 'Retired')),
-    CONSTRAINT property_operating_hours_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
-    CONSTRAINT property_operating_hours_hours_forward CHECK (closes_at > opens_at)
-);
-COMMENT ON COLUMN core.property_operating_hours.day_of_week IS 'ISO: 1 = Monday';
-
-CREATE TABLE core.capability_ownership (
-    ownership_id                   uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    capability_code                text NOT NULL,
-    owner_system                   text NOT NULL,
-    effective_range                tstzrange NOT NULL,
-    approved_by                    uuid,
-    approved_at                    timestamptz,
-    status                         text NOT NULL DEFAULT 'Proposed',
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT capability_ownership_pkey PRIMARY KEY (ownership_id),
-    CONSTRAINT capability_ownership_capability_code_ck CHECK (capability_code ~ '^[A-Z][A-Za-z]+$'),
-    CONSTRAINT capability_ownership_owner_system_ck CHECK (owner_system IN ('Spa', 'Marquee', 'Pms', 'Pos', 'External')),
-    CONSTRAINT capability_ownership_version_ck CHECK (version >= 1),
-    CONSTRAINT capability_ownership_tenant_identity_uq UNIQUE (tenant_id, ownership_id),
-    CONSTRAINT capability_ownership_status_known CHECK (status IN ('Proposed', 'Approved', 'Active', 'Superseded', 'Rejected')),
-    CONSTRAINT capability_ownership_approval_complete CHECK ((approved_by IS NULL) = (approved_at IS NULL)),
-    CONSTRAINT capability_ownership_active_is_approved CHECK (status NOT IN ('Approved', 'Active') OR approved_by IS NOT NULL),
-    CONSTRAINT capability_ownership_proposer_not_approver CHECK (approved_by IS NULL OR approved_by IS DISTINCT FROM created_by)
-);
-COMMENT ON TABLE core.capability_ownership IS 'Exactly one authority per capability, property and instant. Hybrid cutovers are new effective-dated rows. [DEC-001 (APPROVED critical hybrid rule); MCI-001]';
-COMMENT ON COLUMN core.capability_ownership.capability_code IS 'e.g. Catalog, Pricing, Payment, Inventory, Entitlement, GuestProfile';
-
-CREATE TABLE core.configuration_version (
-    configuration_id               uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid,
-    object_type                    text NOT NULL,
-    object_key                     text NOT NULL,
-    value_json                     jsonb NOT NULL,
-    effective_range                tstzrange NOT NULL,
-    proposed_by                    uuid NOT NULL,
-    approved_by                    uuid,
-    approved_at                    timestamptz,
-    status                         text NOT NULL DEFAULT 'Proposed',
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT configuration_version_pkey PRIMARY KEY (configuration_id),
-    CONSTRAINT configuration_version_version_ck CHECK (version >= 1),
-    CONSTRAINT configuration_version_tenant_identity_uq UNIQUE (tenant_id, configuration_id),
-    CONSTRAINT configuration_version_status_known CHECK (status IN ('Proposed', 'Approved', 'Active', 'Superseded', 'Rejected', 'RolledBack')),
-    CONSTRAINT configuration_version_proposer_not_approver CHECK (approved_by IS NULL OR approved_by <> proposed_by)
-);
-
-CREATE TABLE core.feature_flag (
-    feature_flag_id                uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid,
-    record_key                     text NOT NULL,
-    enabled                        boolean NOT NULL DEFAULT false,
-    description                    text,
-    status                         text NOT NULL DEFAULT 'Active',
-    effective_from                 timestamptz NOT NULL DEFAULT now(),
-    effective_to                   timestamptz,
-    source_system                  text NOT NULL DEFAULT 'Spa',
-    source_key                     text,
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT feature_flag_pkey PRIMARY KEY (feature_flag_id),
-    CONSTRAINT feature_flag_version_ck CHECK (version >= 1),
-    CONSTRAINT feature_flag_tenant_identity_uq UNIQUE (tenant_id, feature_flag_id),
-    CONSTRAINT feature_flag_record_key_uq UNIQUE NULLS NOT DISTINCT (tenant_id, property_id, record_key),
-    CONSTRAINT feature_flag_status_known CHECK (status IN ('Active', 'Retired')),
-    CONSTRAINT feature_flag_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from)
-);
-COMMENT ON COLUMN core.feature_flag.record_key IS 'business key, unique within tenant/property';
-
-CREATE TABLE core.reason_code (
-    reason_code_id                 uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid,
-    reason_domain                  text NOT NULL,
-    code                           text NOT NULL,
-    label                          text NOT NULL,
-    requires_note                  boolean NOT NULL DEFAULT false,
-    sort_order                     integer NOT NULL DEFAULT 0,
-    status                         text NOT NULL DEFAULT 'Active',
-    effective_from                 timestamptz NOT NULL DEFAULT now(),
-    effective_to                   timestamptz,
-    source_system                  text NOT NULL DEFAULT 'Spa',
-    source_key                     text,
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT reason_code_pkey PRIMARY KEY (reason_code_id),
-    CONSTRAINT reason_code_reason_domain_ck CHECK (reason_domain ~ '^[A-Z][A-Za-z]+$'),
-    CONSTRAINT reason_code_version_ck CHECK (version >= 1),
-    CONSTRAINT reason_code_tenant_identity_uq UNIQUE (tenant_id, reason_code_id),
-    CONSTRAINT reason_code_status_known CHECK (status IN ('Active', 'Retired')),
-    CONSTRAINT reason_code_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
-    CONSTRAINT reason_code_code_uq UNIQUE NULLS NOT DISTINCT (tenant_id, property_id, reason_domain, code)
-);
-COMMENT ON COLUMN core.reason_code.reason_domain IS 'ScheduleOverride, Cancellation, NoShow, Refund, Comp, InventoryAdjustment, VisitException, ...';
-
-CREATE TABLE core.policy_definition (
-    policy_definition_id           uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid,
-    policy_code                    text NOT NULL,
-    policy_type                    text NOT NULL,
-    description                    text,
-    status                         text NOT NULL DEFAULT 'Active',
-    effective_from                 timestamptz NOT NULL DEFAULT now(),
-    effective_to                   timestamptz,
-    source_system                  text NOT NULL DEFAULT 'Spa',
-    source_key                     text,
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT policy_definition_pkey PRIMARY KEY (policy_definition_id),
-    CONSTRAINT policy_definition_policy_type_ck CHECK (policy_type ~ '^[A-Z][A-Za-z]+$'),
-    CONSTRAINT policy_definition_version_ck CHECK (version >= 1),
-    CONSTRAINT policy_definition_tenant_identity_uq UNIQUE (tenant_id, policy_definition_id),
-    CONSTRAINT policy_definition_status_known CHECK (status IN ('Active', 'Retired')),
-    CONSTRAINT policy_definition_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
-    CONSTRAINT policy_definition_code_uq UNIQUE NULLS NOT DISTINCT (tenant_id, property_id, policy_code)
-);
-COMMENT ON COLUMN core.policy_definition.policy_type IS 'Cancellation, Deposit, NoShow, LateArrival, Buffer, Messaging, Override, Retention';
-
-CREATE TABLE core.policy_version (
-    policy_version_id              uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid,
-    policy_definition_id           uuid NOT NULL,
-    version_number                 integer NOT NULL,
-    definition_json                jsonb NOT NULL,
-    deployment_scope               text NOT NULL DEFAULT 'Training',
-    approved_by                    uuid,
-    approved_at                    timestamptz,
-    status                         text NOT NULL DEFAULT 'Draft',
-    effective_from                 timestamptz NOT NULL DEFAULT now(),
-    effective_to                   timestamptz,
-    source_system                  text NOT NULL DEFAULT 'Spa',
-    source_key                     text,
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT policy_version_pkey PRIMARY KEY (policy_version_id),
-    CONSTRAINT policy_version_version_number_ck CHECK (version_number >= 1),
-    CONSTRAINT policy_version_deployment_scope_ck CHECK (deployment_scope IN ('Training', 'Pilot', 'Production')),
-    CONSTRAINT policy_version_version_ck CHECK (version >= 1),
-    CONSTRAINT policy_version_tenant_identity_uq UNIQUE (tenant_id, policy_version_id),
-    CONSTRAINT policy_version_status_known CHECK (status IN ('Draft', 'Approved', 'Active', 'Retired')),
-    CONSTRAINT policy_version_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
-    CONSTRAINT policy_version_approver_not_author CHECK (approved_by IS NULL OR approved_by IS DISTINCT FROM created_by),
-    CONSTRAINT policy_version_number_uq UNIQUE (tenant_id, policy_definition_id, version_number)
-);
+COMMENT ON COLUMN core.property.opening_hours IS 'weekly hours: [{"day": 1, "opens": "09:00", "closes": "21:00"}], ISO day 1 = Monday';
 
 CREATE TABLE core.principal (
     principal_id                   uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -429,14 +207,17 @@ CREATE TABLE core.principal (
 );
 COMMENT ON TABLE core.principal IS 'Anyone or anything that acts: staff, guest, service or device. principal_id is the OpenFGA user id (user:<principal_id>), so replacing the identity provider never rewrites authorization tuples. [§24 Authentication; OpenFGA user identity]';
 
-CREATE TABLE core.service_identity (
-    service_identity_id            uuid NOT NULL DEFAULT core.uuid_v7(),
+CREATE TABLE core.principal_login (
+    principal_login_id             uuid NOT NULL DEFAULT core.uuid_v7(),
     tenant_id                      uuid NOT NULL,
     principal_id                   uuid NOT NULL,
+    login_type                     text NOT NULL,
     idp_issuer                     text NOT NULL,
     idp_subject                    text NOT NULL,
-    description                    text NOT NULL,
+    username                       text,
+    mfa_required                   boolean NOT NULL DEFAULT true,
     credential_rotated_at          timestamptz,
+    last_authenticated_at          timestamptz,
     status                         text NOT NULL DEFAULT 'Active',
     version                        integer NOT NULL DEFAULT 1,
     created_at                     timestamptz NOT NULL DEFAULT now(),
@@ -444,14 +225,15 @@ CREATE TABLE core.service_identity (
     updated_at                     timestamptz NOT NULL DEFAULT now(),
     updated_by                     uuid,
     correlation_id                 text,
-    CONSTRAINT service_identity_pkey PRIMARY KEY (service_identity_id),
-    CONSTRAINT service_identity_version_ck CHECK (version >= 1),
-    CONSTRAINT service_identity_tenant_identity_uq UNIQUE (tenant_id, service_identity_id),
-    CONSTRAINT service_identity_status_known CHECK (status IN ('Active', 'Disabled')),
-    CONSTRAINT service_identity_subject_uq UNIQUE (idp_issuer, idp_subject),
-    CONSTRAINT service_identity_principal_uq UNIQUE (principal_id)
+    CONSTRAINT principal_login_pkey PRIMARY KEY (principal_login_id),
+    CONSTRAINT principal_login_login_type_ck CHECK (login_type IN ('EntraUser', 'EntraApplication')),
+    CONSTRAINT principal_login_version_ck CHECK (version >= 1),
+    CONSTRAINT principal_login_tenant_identity_uq UNIQUE (tenant_id, principal_login_id),
+    CONSTRAINT principal_login_status_known CHECK (status IN ('Active', 'Disabled', 'Locked')),
+    CONSTRAINT principal_login_subject_uq UNIQUE (idp_issuer, idp_subject)
 );
-COMMENT ON COLUMN core.service_identity.idp_subject IS 'Entra application (client) object id';
+COMMENT ON TABLE core.principal_login IS 'An external identity that signs in as a principal: Entra user (oid) or client-credentials app. [§24 OIDC/SSO, MFA, service accounts; §Security and audit (no password rows)]';
+COMMENT ON COLUMN core.principal_login.idp_subject IS 'Entra object id (oid) or application object id';
 
 CREATE TABLE core.device_registration (
     device_registration_id         uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -481,6 +263,92 @@ CREATE TABLE core.device_registration (
 );
 COMMENT ON COLUMN core.device_registration.public_key_spki IS 'device key for the encrypted offline queue';
 
+CREATE TABLE core.capability_ownership (
+    ownership_id                   uuid NOT NULL DEFAULT core.uuid_v7(),
+    tenant_id                      uuid NOT NULL,
+    property_id                    uuid NOT NULL,
+    capability_code                text NOT NULL,
+    owner_system                   text NOT NULL,
+    effective_range                tstzrange NOT NULL,
+    approved_by                    uuid,
+    approved_at                    timestamptz,
+    status                         text NOT NULL DEFAULT 'Proposed',
+    version                        integer NOT NULL DEFAULT 1,
+    created_at                     timestamptz NOT NULL DEFAULT now(),
+    created_by                     uuid,
+    updated_at                     timestamptz NOT NULL DEFAULT now(),
+    updated_by                     uuid,
+    correlation_id                 text,
+    CONSTRAINT capability_ownership_pkey PRIMARY KEY (ownership_id),
+    CONSTRAINT capability_ownership_capability_code_ck CHECK (capability_code ~ '^[A-Z][A-Za-z]+$'),
+    CONSTRAINT capability_ownership_owner_system_ck CHECK (owner_system IN ('Spa', 'Marquee', 'Pms', 'Pos', 'External')),
+    CONSTRAINT capability_ownership_version_ck CHECK (version >= 1),
+    CONSTRAINT capability_ownership_tenant_identity_uq UNIQUE (tenant_id, ownership_id),
+    CONSTRAINT capability_ownership_status_known CHECK (status IN ('Proposed', 'Approved', 'Active', 'Superseded', 'Rejected')),
+    CONSTRAINT capability_ownership_approval_complete CHECK ((approved_by IS NULL) = (approved_at IS NULL)),
+    CONSTRAINT capability_ownership_active_is_approved CHECK (status NOT IN ('Approved', 'Active') OR approved_by IS NOT NULL),
+    CONSTRAINT capability_ownership_proposer_not_approver CHECK (approved_by IS NULL OR approved_by IS DISTINCT FROM created_by)
+);
+COMMENT ON TABLE core.capability_ownership IS 'Exactly one authority per capability, property and instant. Kept typed (not a setting) because the database must enforce it. [DEC-001 (APPROVED critical hybrid rule); MCI-001]';
+COMMENT ON COLUMN core.capability_ownership.capability_code IS 'e.g. Catalog, Pricing, Payment, Inventory, Entitlement, GuestProfile';
+
+CREATE TABLE core.setting (
+    setting_id                     uuid NOT NULL DEFAULT core.uuid_v7(),
+    tenant_id                      uuid NOT NULL,
+    property_id                    uuid,
+    setting_key                    text NOT NULL,
+    value_json                     jsonb NOT NULL,
+    deployment_scope               text NOT NULL DEFAULT 'Production',
+    reason                         text,
+    approved_by                    uuid,
+    approved_at                    timestamptz,
+    status                         text NOT NULL DEFAULT 'Proposed',
+    effective_from                 timestamptz NOT NULL DEFAULT now(),
+    effective_to                   timestamptz,
+    version                        integer NOT NULL DEFAULT 1,
+    created_at                     timestamptz NOT NULL DEFAULT now(),
+    created_by                     uuid,
+    updated_at                     timestamptz NOT NULL DEFAULT now(),
+    updated_by                     uuid,
+    correlation_id                 text,
+    CONSTRAINT setting_pkey PRIMARY KEY (setting_id),
+    CONSTRAINT setting_setting_key_ck CHECK (setting_key ~ '^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$'),
+    CONSTRAINT setting_deployment_scope_ck CHECK (deployment_scope IN ('Training', 'Pilot', 'Production')),
+    CONSTRAINT setting_version_ck CHECK (version >= 1),
+    CONSTRAINT setting_tenant_identity_uq UNIQUE (tenant_id, setting_id),
+    CONSTRAINT setting_status_known CHECK (status IN ('Proposed', 'Approved', 'Active', 'Superseded', 'Rejected')),
+    CONSTRAINT setting_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
+    CONSTRAINT setting_active_is_approved CHECK (status NOT IN ('Approved', 'Active') OR approved_by IS NOT NULL),
+    CONSTRAINT setting_approver_not_author CHECK (approved_by IS NULL OR approved_by IS DISTINCT FROM created_by)
+);
+COMMENT ON TABLE core.setting IS 'Governed, effective-dated configuration. One active value per key, scope and instant. A change is a new row that someone other than its author approves; the old row becomes Superseded. Keys are namespaced: feature.*, policy.cancellation, policy.deposit, retention.<data_class>, messaging.quiet_hours ... [§Configurable policies and accountability; SEC-005 retention; SEC-014 segregation of duties]';
+
+CREATE TABLE core.code_list (
+    code_list_id                   uuid NOT NULL DEFAULT core.uuid_v7(),
+    tenant_id                      uuid NOT NULL,
+    property_id                    uuid,
+    list_code                      text NOT NULL,
+    code                           text NOT NULL,
+    label                          text NOT NULL,
+    sort_order                     integer NOT NULL DEFAULT 0,
+    attributes                     jsonb NOT NULL DEFAULT '{}',
+    status                         text NOT NULL DEFAULT 'Active',
+    version                        integer NOT NULL DEFAULT 1,
+    created_at                     timestamptz NOT NULL DEFAULT now(),
+    created_by                     uuid,
+    updated_at                     timestamptz NOT NULL DEFAULT now(),
+    updated_by                     uuid,
+    correlation_id                 text,
+    CONSTRAINT code_list_pkey PRIMARY KEY (code_list_id),
+    CONSTRAINT code_list_list_code_ck CHECK (list_code IN ('ReasonCode', 'Department', 'Tender', 'LicenseType', 'RevenueCenter', 'ServiceCategory', 'ItemCategory')),
+    CONSTRAINT code_list_version_ck CHECK (version >= 1),
+    CONSTRAINT code_list_tenant_identity_uq UNIQUE (tenant_id, code_list_id),
+    CONSTRAINT code_list_status_known CHECK (status IN ('Active', 'Retired')),
+    CONSTRAINT code_list_code_uq UNIQUE NULLS NOT DISTINCT (tenant_id, property_id, list_code, code)
+);
+COMMENT ON TABLE core.code_list IS 'Simple enumerations: (list_code, code) -> label + attributes. Referencing columns hold the code; commands validate it. Anything with money or enforcement semantics stays a typed table. [CON override reasons; tenders; §Provider license catalog (37 types); §Income accounts]';
+COMMENT ON COLUMN core.code_list.attributes IS 'list-specific: ReasonCode {domain, requires_note}; Tender {tender_type}; LicenseType {issuer, jurisdiction_dependent}';
+
 CREATE TABLE core.audit_event (
     audit_id                       uuid NOT NULL DEFAULT core.uuid_v7(),
     tenant_id                      uuid NOT NULL,
@@ -493,6 +361,8 @@ CREATE TABLE core.audit_event (
     entity_type                    text NOT NULL,
     entity_id                      uuid NOT NULL,
     entity_version                 integer,
+    from_status                    text,
+    to_status                      text,
     before_hash                    char(64),
     after_hash                     char(64),
     before_data                    jsonb,
@@ -508,7 +378,7 @@ CREATE TABLE core.audit_event (
     CONSTRAINT audit_event_pkey PRIMARY KEY (audit_id, occurred_at),
     CONSTRAINT audit_event_actor_type_ck CHECK (actor_type IN ('Staff', 'Guest', 'Service', 'Device', 'System'))
 ) PARTITION BY RANGE (occurred_at);
-COMMENT ON TABLE core.audit_event IS 'Append-only business and security audit. before/after_data never contain restricted columns; the hashes prove what changed without copying restricted data. [SEC-004; SEC-007/008 sensitive-read audit; §Audit trail and security]';
+COMMENT ON TABLE core.audit_event IS 'Append-only business and security audit, and the history of every entity (status changes, visit events, service and policy changes). before/after_data never contain restricted columns. [SEC-004; SEC-007/008 sensitive-read audit; DEC-005]';
 COMMENT ON COLUMN core.audit_event.on_behalf_of_principal_id IS 'delegated authority or AI acting for a principal';
 COMMENT ON COLUMN core.audit_event.authorization_decision IS 'OpenFGA check: {relation, object, model_id, allowed}';
 
@@ -528,7 +398,7 @@ CREATE TABLE core.audit_seal (
     CONSTRAINT audit_seal_period_forward CHECK (period_end > period_start),
     CONSTRAINT audit_seal_period_uq UNIQUE (tenant_id, period_start)
 );
-COMMENT ON TABLE core.audit_seal IS 'Periodic digest over a tenant''s audit rows, chained to the previous seal. Recomputing a period and comparing proves the rows were not altered or removed. [§24 Audit: tamper-evident]';
+COMMENT ON TABLE core.audit_seal IS 'Periodic digest over a tenant''s audit rows, chained to the previous seal. [§24 Audit: tamper-evident]';
 
 CREATE TABLE core.event_outbox (
     event_id                       uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -551,7 +421,7 @@ CREATE TABLE core.event_outbox (
     CONSTRAINT event_outbox_pkey PRIMARY KEY (event_id, occurred_at),
     CONSTRAINT event_outbox_attempt_count_ck CHECK (attempt_count >= 0)
 ) PARTITION BY RANGE (occurred_at);
-COMMENT ON TABLE core.event_outbox IS 'Written in the same transaction as the change it announces. Payloads carry no secrets, payment credentials or clinical content (spec: logs and events must omit them). [NFR-001; §26 Integration operations; FGA tuple sync]';
+COMMENT ON TABLE core.event_outbox IS 'Written in the same transaction as the change it announces. No secrets, card data or clinical content. [NFR-001; §26 Integration operations; FGA tuple sync]';
 
 CREATE TABLE core.event_inbox (
     event_inbox_id                 uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -624,43 +494,7 @@ CREATE TABLE core.external_mapping (
     CONSTRAINT external_mapping_cipher_has_key CHECK ((snapshot_cipher IS NULL) = (encryption_key_version IS NULL)),
     CONSTRAINT external_mapping_external_uq UNIQUE NULLS NOT DISTINCT (tenant_id, source_system, entity_type, external_property_reference, source_key)
 );
-COMMENT ON TABLE core.external_mapping IS 'Local entity <-> external system id. source_system/source_key are the external side. [MCI-004 identity and external mappings; §PMS and enterprise POS guest ingestion]';
-
-CREATE TABLE core.data_retention_rule (
-    data_retention_rule_id         uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid,
-    data_class                     text NOT NULL,
-    entity_table                   text NOT NULL,
-    trigger_column                 text NOT NULL,
-    retention_interval             interval NOT NULL,
-    retention_action               text NOT NULL,
-    jurisdiction                   text,
-    legal_basis                    text,
-    owner_role                     text NOT NULL,
-    approved_by                    uuid,
-    approved_at                    timestamptz,
-    status                         text NOT NULL DEFAULT 'Draft',
-    effective_from                 timestamptz NOT NULL DEFAULT now(),
-    effective_to                   timestamptz,
-    source_system                  text NOT NULL DEFAULT 'Spa',
-    source_key                     text,
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT data_retention_rule_pkey PRIMARY KEY (data_retention_rule_id),
-    CONSTRAINT data_retention_rule_data_class_ck CHECK (data_class IN ('Operational', 'Personal', 'Commercial', 'CommunityRestricted', 'ClinicalRestricted')),
-    CONSTRAINT data_retention_rule_retention_interval_ck CHECK (retention_interval > interval '0'),
-    CONSTRAINT data_retention_rule_retention_action_ck CHECK (retention_action IN ('Delete', 'Redact', 'Deidentify', 'Archive')),
-    CONSTRAINT data_retention_rule_version_ck CHECK (version >= 1),
-    CONSTRAINT data_retention_rule_tenant_identity_uq UNIQUE (tenant_id, data_retention_rule_id),
-    CONSTRAINT data_retention_rule_status_known CHECK (status IN ('Draft', 'Approved', 'Active', 'Retired')),
-    CONSTRAINT data_retention_rule_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
-    CONSTRAINT data_retention_rule_active_is_approved CHECK (status NOT IN ('Approved', 'Active') OR approved_by IS NOT NULL)
-);
+COMMENT ON TABLE core.external_mapping IS 'Local entity <-> external system id. source_system/source_key are the external side. [MCI-004 identity and external mappings; PMS/POS ingestion (Marquee-Integrated mode)]';
 
 CREATE TABLE core.legal_hold (
     legal_hold_id                  uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -690,40 +524,26 @@ CREATE TABLE core.legal_hold (
     CONSTRAINT legal_hold_status_known CHECK (status IN ('Active', 'Released')),
     CONSTRAINT legal_hold_release_complete CHECK ((status = 'Released') = (released_at IS NOT NULL AND released_by IS NOT NULL))
 );
+COMMENT ON TABLE core.legal_hold IS 'Kept typed: retention and erasure jobs must be able to find active holds with one indexed query. [SEC-005 legal hold]';
 
-ALTER TABLE core.department ADD CONSTRAINT department_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE core.department ADD CONSTRAINT department_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
 ALTER TABLE core.property ADD CONSTRAINT property_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-CREATE INDEX property_operating_hours_scope_ix ON core.property_operating_hours (tenant_id, property_id);
-ALTER TABLE core.property_operating_hours ADD CONSTRAINT property_operating_hours_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE core.property_operating_hours ADD CONSTRAINT property_operating_hours_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-CREATE INDEX capability_ownership_scope_ix ON core.capability_ownership (tenant_id, property_id);
-ALTER TABLE core.capability_ownership ADD CONSTRAINT capability_ownership_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE core.capability_ownership ADD CONSTRAINT capability_ownership_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-CREATE INDEX configuration_version_scope_ix ON core.configuration_version (tenant_id, property_id);
-ALTER TABLE core.configuration_version ADD CONSTRAINT configuration_version_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE core.configuration_version ADD CONSTRAINT configuration_version_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-CREATE INDEX feature_flag_scope_ix ON core.feature_flag (tenant_id, property_id);
-ALTER TABLE core.feature_flag ADD CONSTRAINT feature_flag_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE core.feature_flag ADD CONSTRAINT feature_flag_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE core.reason_code ADD CONSTRAINT reason_code_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE core.reason_code ADD CONSTRAINT reason_code_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE core.policy_definition ADD CONSTRAINT policy_definition_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE core.policy_definition ADD CONSTRAINT policy_definition_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE core.policy_version ADD CONSTRAINT policy_version_policy_definition_id_fk FOREIGN KEY (tenant_id, policy_definition_id) REFERENCES core.policy_definition (tenant_id, policy_definition_id) ON DELETE RESTRICT;
-CREATE INDEX policy_version_policy_definition_id_ix ON core.policy_version (tenant_id, policy_definition_id);
-CREATE INDEX policy_version_scope_ix ON core.policy_version (tenant_id, property_id);
-ALTER TABLE core.policy_version ADD CONSTRAINT policy_version_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE core.policy_version ADD CONSTRAINT policy_version_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
 ALTER TABLE core.principal ADD CONSTRAINT principal_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE core.service_identity ADD CONSTRAINT service_identity_principal_id_fk FOREIGN KEY (tenant_id, principal_id) REFERENCES core.principal (tenant_id, principal_id) ON DELETE RESTRICT;
-CREATE INDEX service_identity_principal_id_ix ON core.service_identity (tenant_id, principal_id);
-ALTER TABLE core.service_identity ADD CONSTRAINT service_identity_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
+ALTER TABLE core.principal_login ADD CONSTRAINT principal_login_principal_id_fk FOREIGN KEY (tenant_id, principal_id) REFERENCES core.principal (tenant_id, principal_id) ON DELETE RESTRICT;
+CREATE INDEX principal_login_principal_id_ix ON core.principal_login (tenant_id, principal_id);
+ALTER TABLE core.principal_login ADD CONSTRAINT principal_login_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE core.device_registration ADD CONSTRAINT device_registration_principal_id_fk FOREIGN KEY (tenant_id, principal_id) REFERENCES core.principal (tenant_id, principal_id) ON DELETE RESTRICT;
 CREATE INDEX device_registration_principal_id_ix ON core.device_registration (tenant_id, principal_id);
 CREATE INDEX device_registration_scope_ix ON core.device_registration (tenant_id, property_id);
 ALTER TABLE core.device_registration ADD CONSTRAINT device_registration_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE core.device_registration ADD CONSTRAINT device_registration_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
+CREATE INDEX capability_ownership_scope_ix ON core.capability_ownership (tenant_id, property_id);
+ALTER TABLE core.capability_ownership ADD CONSTRAINT capability_ownership_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
+ALTER TABLE core.capability_ownership ADD CONSTRAINT capability_ownership_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
+CREATE INDEX setting_scope_ix ON core.setting (tenant_id, property_id);
+ALTER TABLE core.setting ADD CONSTRAINT setting_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
+ALTER TABLE core.setting ADD CONSTRAINT setting_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
+ALTER TABLE core.code_list ADD CONSTRAINT code_list_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
+ALTER TABLE core.code_list ADD CONSTRAINT code_list_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
 ALTER TABLE core.audit_event ADD CONSTRAINT audit_event_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE core.audit_event ADD CONSTRAINT audit_event_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
 ALTER TABLE core.audit_seal ADD CONSTRAINT audit_seal_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
@@ -737,26 +557,18 @@ ALTER TABLE core.idempotency_record ADD CONSTRAINT idempotency_record_property_f
 CREATE INDEX external_mapping_scope_ix ON core.external_mapping (tenant_id, property_id);
 ALTER TABLE core.external_mapping ADD CONSTRAINT external_mapping_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE core.external_mapping ADD CONSTRAINT external_mapping_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-CREATE INDEX data_retention_rule_scope_ix ON core.data_retention_rule (tenant_id, property_id);
-ALTER TABLE core.data_retention_rule ADD CONSTRAINT data_retention_rule_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE core.data_retention_rule ADD CONSTRAINT data_retention_rule_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
 CREATE INDEX legal_hold_scope_ix ON core.legal_hold (tenant_id, property_id);
 ALTER TABLE core.legal_hold ADD CONSTRAINT legal_hold_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE core.legal_hold ADD CONSTRAINT legal_hold_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
 
 CREATE TRIGGER tenant_touch BEFORE UPDATE ON core.tenant FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER department_touch BEFORE UPDATE ON core.department FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER property_touch BEFORE UPDATE ON core.property FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER property_operating_hours_touch BEFORE UPDATE ON core.property_operating_hours FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER capability_ownership_touch BEFORE UPDATE ON core.capability_ownership FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER configuration_version_touch BEFORE UPDATE ON core.configuration_version FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER feature_flag_touch BEFORE UPDATE ON core.feature_flag FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER reason_code_touch BEFORE UPDATE ON core.reason_code FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER policy_definition_touch BEFORE UPDATE ON core.policy_definition FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER policy_version_touch BEFORE UPDATE ON core.policy_version FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER principal_touch BEFORE UPDATE ON core.principal FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER service_identity_touch BEFORE UPDATE ON core.service_identity FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
+CREATE TRIGGER principal_login_touch BEFORE UPDATE ON core.principal_login FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER device_registration_touch BEFORE UPDATE ON core.device_registration FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
+CREATE TRIGGER capability_ownership_touch BEFORE UPDATE ON core.capability_ownership FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
+CREATE TRIGGER setting_touch BEFORE UPDATE ON core.setting FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
+CREATE TRIGGER code_list_touch BEFORE UPDATE ON core.code_list FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER audit_event_append_only BEFORE UPDATE OR DELETE ON core.audit_event FOR EACH ROW EXECUTE FUNCTION core.forbid_mutation();
 DO $$ BEGIN PERFORM core.ensure_monthly_partitions('core.audit_event'::regclass, (date_trunc('month', now() AT TIME ZONE 'UTC') - interval '1 month')::date, 4); END $$;
 CREATE TABLE core.audit_event_default PARTITION OF core.audit_event DEFAULT;
@@ -766,22 +578,21 @@ CREATE TABLE core.event_outbox_default PARTITION OF core.event_outbox DEFAULT;
 CREATE TRIGGER event_inbox_append_only BEFORE UPDATE OR DELETE ON core.event_inbox FOR EACH ROW EXECUTE FUNCTION core.forbid_mutation();
 CREATE TRIGGER idempotency_record_touch BEFORE UPDATE ON core.idempotency_record FOR EACH ROW EXECUTE FUNCTION core.touch();
 CREATE TRIGGER external_mapping_touch BEFORE UPDATE ON core.external_mapping FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER data_retention_rule_touch BEFORE UPDATE ON core.data_retention_rule FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER legal_hold_touch BEFORE UPDATE ON core.legal_hold FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 
 ALTER TABLE core.tenant ENABLE ROW LEVEL SECURITY;
 ALTER TABLE core.tenant FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_scope ON core.tenant USING (tenant_id = (SELECT core.current_tenant_id()));
 
-ALTER TABLE core.property_operating_hours ADD CONSTRAINT property_operating_hours_no_overlap
-    EXCLUDE USING gist (tenant_id WITH =, property_id WITH =, day_of_week WITH =,
-                        tstzrange(effective_from, coalesce(effective_to, 'infinity'), '[)') WITH &&)
-    WHERE (status = 'Active');
-
 ALTER TABLE core.capability_ownership ADD CONSTRAINT capability_ownership_single_authority
     EXCLUDE USING gist (tenant_id WITH =, property_id WITH =, capability_code WITH =, effective_range WITH &&)
     WHERE (status IN ('Approved', 'Active'));
-CREATE INDEX configuration_version_object_ix ON core.configuration_version (tenant_id, object_type, object_key);
+
+ALTER TABLE core.setting ADD CONSTRAINT setting_single_active
+    EXCLUDE USING gist (tenant_id WITH =, (coalesce(property_id, '00000000-0000-0000-0000-000000000000'::uuid)) WITH =,
+                        setting_key WITH =, deployment_scope WITH =,
+                        tstzrange(effective_from, coalesce(effective_to, 'infinity'), '[)') WITH &&)
+    WHERE (status IN ('Approved', 'Active'));
 CREATE INDEX audit_event_entity_ix ON core.audit_event (tenant_id, entity_type, entity_id, occurred_at DESC);
 CREATE INDEX audit_event_scope_ix ON core.audit_event (tenant_id, property_id, occurred_at DESC);
 CREATE INDEX audit_event_actor_ix ON core.audit_event (tenant_id, actor_principal_id, occurred_at DESC);

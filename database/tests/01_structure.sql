@@ -3,7 +3,7 @@
 DO $$
 DECLARE bad text;
     app_schemas text[] := ARRAY['core','catalog','resources','workforce','guest','scheduling',
-                                'intake','visit','inventory','commerce','messaging','reporting'];
+                                'intake','inventory','commerce','messaging','reporting'];
 BEGIN
     -- 1. Every table that carries tenant_id has RLS enabled AND forced (partitions are reached via parents).
     SELECT string_agg(n.nspname || '.' || c.relname, ', ') INTO bad
@@ -24,7 +24,7 @@ BEGIN
       FROM information_schema.role_table_grants
      WHERE grantee = 'spms_app' AND privilege_type = 'DELETE'
        AND table_schema || '.' || table_name NOT IN
-           ('scheduling.availability_hold', 'commerce.cart_line', 'core.idempotency_record');
+           ('commerce.order_line', 'core.idempotency_record');
     ASSERT bad IS NULL, 'unexpected DELETE grants: ' || bad;
 
     -- 4. The runtime role holds nothing on intake tables; only spms_intake does.
@@ -47,10 +47,9 @@ BEGIN
         ('guest','core'),
         ('scheduling','core'), ('scheduling','catalog'), ('scheduling','resources'), ('scheduling','workforce'), ('scheduling','guest'),
         ('intake','core'), ('intake','catalog'), ('intake','guest'), ('intake','workforce'), ('intake','scheduling'),
-        ('visit','core'), ('visit','guest'), ('visit','workforce'), ('visit','resources'), ('visit','scheduling'),
         ('inventory','core'), ('inventory','catalog'), ('inventory','resources'), ('inventory','scheduling'),
         ('commerce','core'), ('commerce','catalog'), ('commerce','resources'), ('commerce','guest'), ('commerce','scheduling'),
-        ('commerce','visit'), ('commerce','inventory'),
+        ('commerce','inventory'),
         ('messaging','core'), ('messaging','catalog'), ('messaging','guest'), ('messaging','scheduling'),
         ('reporting','core'))
     SELECT string_agg(DISTINCT s.nspname || ' -> ' || t.nspname, ', ') INTO bad
@@ -63,10 +62,8 @@ BEGIN
 
     -- 7. Append-only tables carry the raising trigger.
     SELECT string_agg(t.tbl, ', ') INTO bad FROM (VALUES
-        ('core.audit_event'), ('core.audit_seal'), ('core.event_inbox'), ('scheduling.appointment_status_history'),
-        ('intake.treatment_note'), ('intake.provider_acknowledgement'), ('inventory.inventory_ledger_entry'),
-        ('commerce.payment_transaction'), ('commerce.deposit_ledger_entry'), ('messaging.message_delivery'),
-        ('reporting.reporting_fact'), ('visit.visit_event')) t(tbl)
+        ('core.audit_event'), ('core.audit_seal'), ('core.event_inbox'), ('intake.treatment_note'),
+        ('inventory.inventory_ledger_entry'), ('commerce.payment_transaction')) t(tbl)
      WHERE NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid = t.tbl::regclass
                           AND g.tgfoid = 'core.forbid_mutation'::regproc);
     ASSERT bad IS NULL, 'append-only tables without the trigger: ' || bad;
@@ -76,11 +73,16 @@ BEGIN
            'audit_event is missing monthly partitions';
     ASSERT NOT EXISTS (SELECT 1 FROM core.audit_event_default), 'rows in audit_event_default';
 
+    -- 10. The refactor target: one table per entity. Adding a table is a design decision, not a default.
+    ASSERT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = ANY (app_schemas) AND c.relkind IN ('r', 'p') AND NOT c.relispartition) = 61,
+           'table count changed - update the design and this assertion together';
+
     -- 9. Every exclusion constraint the design relies on is present.
     SELECT string_agg(x, ', ') INTO bad FROM unnest(ARRAY[
-        'appointment_resource_no_overlap', 'capability_ownership_single_authority', 'service_version_single_published',
+        'appointment_room_no_overlap', 'capability_ownership_single_authority', 'setting_single_active',
         'staff_qualification_no_overlap', 'work_schedule_no_overlap', 'maintenance_window_no_overlap',
-        'staff_role_assignment_no_overlap', 'property_operating_hours_no_overlap']) x
+        'staff_role_assignment_no_overlap', 'guest_relationship_no_overlap']) x
      WHERE NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = x AND contype = 'x');
     ASSERT bad IS NULL, 'missing exclusion constraints: ' || bad;
 END $$;

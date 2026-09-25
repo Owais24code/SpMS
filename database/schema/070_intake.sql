@@ -3,37 +3,13 @@
 
 CREATE SCHEMA IF NOT EXISTS intake AUTHORIZATION spms_owner;
 
-CREATE TABLE intake.form_template (
-    form_template_id               uuid NOT NULL DEFAULT core.uuid_v7(),
+CREATE TABLE intake.form_definition (
+    form_definition_id             uuid NOT NULL DEFAULT core.uuid_v7(),
     tenant_id                      uuid NOT NULL,
-    template_code                  text NOT NULL,
+    form_code                      text NOT NULL,
+    version_number                 integer NOT NULL,
     title                          text NOT NULL,
     purpose                        text NOT NULL,
-    status                         text NOT NULL DEFAULT 'Draft',
-    effective_from                 timestamptz NOT NULL DEFAULT now(),
-    effective_to                   timestamptz,
-    source_system                  text NOT NULL DEFAULT 'Spa',
-    source_key                     text,
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT form_template_pkey PRIMARY KEY (form_template_id),
-    CONSTRAINT form_template_purpose_ck CHECK (purpose IN ('HealthIntake', 'Consent', 'Waiver', 'Feedback')),
-    CONSTRAINT form_template_version_ck CHECK (version >= 1),
-    CONSTRAINT form_template_tenant_identity_uq UNIQUE (tenant_id, form_template_id),
-    CONSTRAINT form_template_status_known CHECK (status IN ('Draft', 'Active', 'Retired')),
-    CONSTRAINT form_template_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
-    CONSTRAINT form_template_code_uq UNIQUE (tenant_id, template_code)
-);
-
-CREATE TABLE intake.form_version (
-    form_version_id                uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    form_template_id               uuid NOT NULL,
-    version_number                 integer NOT NULL,
     schema_json                    jsonb NOT NULL,
     published_at                   timestamptz,
     published_by                   uuid,
@@ -48,59 +24,39 @@ CREATE TABLE intake.form_version (
     updated_at                     timestamptz NOT NULL DEFAULT now(),
     updated_by                     uuid,
     correlation_id                 text,
-    CONSTRAINT form_version_pkey PRIMARY KEY (form_version_id),
-    CONSTRAINT form_version_version_number_ck CHECK (version_number >= 1),
-    CONSTRAINT form_version_version_ck CHECK (version >= 1),
-    CONSTRAINT form_version_tenant_identity_uq UNIQUE (tenant_id, form_version_id),
-    CONSTRAINT form_version_status_known CHECK (status IN ('Draft', 'Published', 'Retired')),
-    CONSTRAINT form_version_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
-    CONSTRAINT form_version_published_complete CHECK (status <> 'Published' OR (published_at IS NOT NULL AND published_by IS NOT NULL)),
-    CONSTRAINT form_version_number_uq UNIQUE (tenant_id, form_template_id, version_number)
+    CONSTRAINT form_definition_pkey PRIMARY KEY (form_definition_id),
+    CONSTRAINT form_definition_version_number_ck CHECK (version_number >= 1),
+    CONSTRAINT form_definition_purpose_ck CHECK (purpose IN ('HealthIntake', 'Consent', 'Waiver', 'Feedback')),
+    CONSTRAINT form_definition_version_ck CHECK (version >= 1),
+    CONSTRAINT form_definition_tenant_identity_uq UNIQUE (tenant_id, form_definition_id),
+    CONSTRAINT form_definition_status_known CHECK (status IN ('Draft', 'Published', 'Retired')),
+    CONSTRAINT form_definition_effective_range_ck CHECK (effective_to IS NULL OR effective_to > effective_from),
+    CONSTRAINT form_definition_published_complete CHECK (status <> 'Published' OR (published_at IS NOT NULL AND published_by IS NOT NULL)),
+    CONSTRAINT form_definition_version_uq UNIQUE (tenant_id, form_code, version_number)
 );
-COMMENT ON COLUMN intake.form_version.schema_json IS 'field definitions, including which answers form the minimum-necessary summary';
-
-CREATE TABLE intake.form_assignment (
-    form_assignment_id             uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    form_version_id                uuid NOT NULL,
-    guest_id                       uuid NOT NULL,
-    appointment_id                 uuid,
-    assigned_at                    timestamptz NOT NULL DEFAULT now(),
-    due_at                         timestamptz,
-    completed_at                   timestamptz,
-    status                         text NOT NULL DEFAULT 'Assigned',
-    version                        integer NOT NULL DEFAULT 1,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    updated_at                     timestamptz NOT NULL DEFAULT now(),
-    updated_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT form_assignment_pkey PRIMARY KEY (form_assignment_id),
-    CONSTRAINT form_assignment_version_ck CHECK (version >= 1),
-    CONSTRAINT form_assignment_tenant_identity_uq UNIQUE (tenant_id, form_assignment_id),
-    CONSTRAINT form_assignment_prop_ref_uq UNIQUE (tenant_id, property_id, form_assignment_id),
-    CONSTRAINT form_assignment_status_known CHECK (status IN ('Assigned', 'InProgress', 'Submitted', 'Waived', 'Expired'))
-);
+COMMENT ON TABLE intake.form_definition IS 'One row per published version of a form. A submission references the exact version answered. [§53.2 Booking and intake]';
+COMMENT ON COLUMN intake.form_definition.schema_json IS 'field definitions, including which answers form the minimum-necessary summary';
 
 CREATE TABLE intake.intake_submission (
     submission_id                  uuid NOT NULL DEFAULT core.uuid_v7(),
     tenant_id                      uuid NOT NULL,
     property_id                    uuid NOT NULL,
-    form_assignment_id             uuid,
-    form_version_id                uuid NOT NULL,
+    form_definition_id             uuid NOT NULL,
     appointment_id                 uuid,
     guest_id                       uuid NOT NULL,
     submitted_by_guest_id          uuid,
-    response_cipher                bytea NOT NULL,
+    due_at                         timestamptz,
+    response_cipher                bytea,
     summary_cipher                 bytea,
-    key_version                    text NOT NULL,
+    key_version                    text,
     requires_review                boolean NOT NULL DEFAULT false,
     submitted_at                   timestamptz,
     locked_at                      timestamptz,
     reviewed_by                    uuid,
     reviewed_at                    timestamptz,
-    status                         text NOT NULL DEFAULT 'Draft',
+    acknowledged_by_staff_id       uuid,
+    acknowledged_at                timestamptz,
+    status                         text NOT NULL DEFAULT 'Assigned',
     version                        integer NOT NULL DEFAULT 1,
     created_at                     timestamptz NOT NULL DEFAULT now(),
     created_by                     uuid,
@@ -110,27 +66,14 @@ CREATE TABLE intake.intake_submission (
     CONSTRAINT intake_submission_pkey PRIMARY KEY (submission_id),
     CONSTRAINT intake_submission_version_ck CHECK (version >= 1),
     CONSTRAINT intake_submission_tenant_identity_uq UNIQUE (tenant_id, submission_id),
-    CONSTRAINT intake_submission_status_known CHECK (status IN ('Draft', 'Submitted', 'Locked', 'Reviewed', 'Superseded')),
-    CONSTRAINT intake_submission_submitted_complete CHECK (status = 'Draft' OR submitted_at IS NOT NULL),
-    CONSTRAINT intake_submission_locked_complete CHECK (status NOT IN ('Locked', 'Reviewed') OR locked_at IS NOT NULL)
+    CONSTRAINT intake_submission_status_known CHECK (status IN ('Assigned', 'Draft', 'Submitted', 'Locked', 'Reviewed', 'Waived', 'Superseded')),
+    CONSTRAINT intake_submission_answers_have_key CHECK ((response_cipher IS NULL) = (key_version IS NULL)),
+    CONSTRAINT intake_submission_submitted_has_answers CHECK (status IN ('Assigned', 'Draft', 'Waived') OR (response_cipher IS NOT NULL AND submitted_at IS NOT NULL)),
+    CONSTRAINT intake_submission_locked_complete CHECK (status NOT IN ('Locked', 'Reviewed') OR locked_at IS NOT NULL),
+    CONSTRAINT intake_submission_ack_complete CHECK ((acknowledged_by_staff_id IS NULL) = (acknowledged_at IS NULL))
 );
-COMMENT ON TABLE intake.intake_submission IS 'response_cipher is the full answer set (guest and HR-authorised review only). summary_cipher is the minimum-necessary subset the assigned provider sees. [SEC-008; DEC-004; intake:update:own:before_lock; provider intake:read:assigned:minimum_necessary]';
+COMMENT ON TABLE intake.intake_submission IS 'Created as Assigned when a form is due. response_cipher is the full answer set; summary_cipher is the minimum-necessary subset the assigned provider sees and acknowledges. [SEC-008; DEC-004; intake:update:own:before_lock; provider intake:read:assigned:minimum_necessary]';
 COMMENT ON COLUMN intake.intake_submission.submitted_by_guest_id IS 'guardian for a minor';
-
-CREATE TABLE intake.provider_acknowledgement (
-    provider_acknowledgement_id    uuid NOT NULL DEFAULT core.uuid_v7(),
-    tenant_id                      uuid NOT NULL,
-    property_id                    uuid NOT NULL,
-    submission_id                  uuid NOT NULL,
-    appointment_id                 uuid NOT NULL,
-    staff_id                       uuid NOT NULL,
-    created_at                     timestamptz NOT NULL DEFAULT now(),
-    created_by                     uuid,
-    correlation_id                 text,
-    CONSTRAINT provider_acknowledgement_pkey PRIMARY KEY (provider_acknowledgement_id),
-    CONSTRAINT provider_acknowledgement_tenant_identity_uq UNIQUE (tenant_id, provider_acknowledgement_id),
-    CONSTRAINT provider_acknowledgement_once_uq UNIQUE (tenant_id, submission_id, staff_id, appointment_id)
-);
 
 CREATE TABLE intake.treatment_note (
     note_id                        uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -155,38 +98,19 @@ CREATE TABLE intake.treatment_note (
 COMMENT ON TABLE intake.treatment_note IS 'Notes are never edited. An amendment is a new note that supersedes the old one, with a reason. [treatment_notes: create:assigned, read:authored_or_assigned, amend:authored; SEC-008]';
 COMMENT ON COLUMN intake.treatment_note.authored_at IS 'may precede created_at when captured offline on the tablet';
 
-ALTER TABLE intake.form_template ADD CONSTRAINT form_template_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE intake.form_version ADD CONSTRAINT form_version_form_template_id_fk FOREIGN KEY (tenant_id, form_template_id) REFERENCES intake.form_template (tenant_id, form_template_id) ON DELETE RESTRICT;
-CREATE INDEX form_version_form_template_id_ix ON intake.form_version (tenant_id, form_template_id);
-ALTER TABLE intake.form_version ADD CONSTRAINT form_version_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE intake.form_assignment ADD CONSTRAINT form_assignment_form_version_id_fk FOREIGN KEY (tenant_id, form_version_id) REFERENCES intake.form_version (tenant_id, form_version_id) ON DELETE RESTRICT;
-CREATE INDEX form_assignment_form_version_id_ix ON intake.form_assignment (tenant_id, form_version_id);
-ALTER TABLE intake.form_assignment ADD CONSTRAINT form_assignment_guest_id_fk FOREIGN KEY (tenant_id, guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
-CREATE INDEX form_assignment_guest_id_ix ON intake.form_assignment (tenant_id, guest_id);
-ALTER TABLE intake.form_assignment ADD CONSTRAINT form_assignment_appointment_id_fk FOREIGN KEY (tenant_id, property_id, appointment_id) REFERENCES scheduling.appointment (tenant_id, property_id, appointment_id) ON DELETE RESTRICT;
-CREATE INDEX form_assignment_appointment_id_ix ON intake.form_assignment (tenant_id, property_id, appointment_id);
-ALTER TABLE intake.form_assignment ADD CONSTRAINT form_assignment_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE intake.form_assignment ADD CONSTRAINT form_assignment_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE intake.intake_submission ADD CONSTRAINT intake_submission_form_assignment_id_fk FOREIGN KEY (tenant_id, property_id, form_assignment_id) REFERENCES intake.form_assignment (tenant_id, property_id, form_assignment_id) ON DELETE RESTRICT;
-CREATE INDEX intake_submission_form_assignment_id_ix ON intake.intake_submission (tenant_id, property_id, form_assignment_id);
-ALTER TABLE intake.intake_submission ADD CONSTRAINT intake_submission_form_version_id_fk FOREIGN KEY (tenant_id, form_version_id) REFERENCES intake.form_version (tenant_id, form_version_id) ON DELETE RESTRICT;
-CREATE INDEX intake_submission_form_version_id_ix ON intake.intake_submission (tenant_id, form_version_id);
+ALTER TABLE intake.form_definition ADD CONSTRAINT form_definition_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
+ALTER TABLE intake.intake_submission ADD CONSTRAINT intake_submission_form_definition_id_fk FOREIGN KEY (tenant_id, form_definition_id) REFERENCES intake.form_definition (tenant_id, form_definition_id) ON DELETE RESTRICT;
+CREATE INDEX intake_submission_form_definition_id_ix ON intake.intake_submission (tenant_id, form_definition_id);
 ALTER TABLE intake.intake_submission ADD CONSTRAINT intake_submission_appointment_id_fk FOREIGN KEY (tenant_id, property_id, appointment_id) REFERENCES scheduling.appointment (tenant_id, property_id, appointment_id) ON DELETE RESTRICT;
 CREATE INDEX intake_submission_appointment_id_ix ON intake.intake_submission (tenant_id, property_id, appointment_id);
 ALTER TABLE intake.intake_submission ADD CONSTRAINT intake_submission_guest_id_fk FOREIGN KEY (tenant_id, guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
 CREATE INDEX intake_submission_guest_id_ix ON intake.intake_submission (tenant_id, guest_id);
 ALTER TABLE intake.intake_submission ADD CONSTRAINT intake_submission_submitted_by_guest_id_fk FOREIGN KEY (tenant_id, submitted_by_guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
 CREATE INDEX intake_submission_submitted_by_guest_id_ix ON intake.intake_submission (tenant_id, submitted_by_guest_id);
+ALTER TABLE intake.intake_submission ADD CONSTRAINT intake_submission_acknowledged_by_staff_id_fk FOREIGN KEY (tenant_id, acknowledged_by_staff_id) REFERENCES workforce.staff (tenant_id, staff_id) ON DELETE RESTRICT;
+CREATE INDEX intake_submission_acknowledged_by_staff_id_ix ON intake.intake_submission (tenant_id, acknowledged_by_staff_id);
 ALTER TABLE intake.intake_submission ADD CONSTRAINT intake_submission_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE intake.intake_submission ADD CONSTRAINT intake_submission_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
-ALTER TABLE intake.provider_acknowledgement ADD CONSTRAINT provider_acknowledgement_submission_id_fk FOREIGN KEY (tenant_id, submission_id) REFERENCES intake.intake_submission (tenant_id, submission_id) ON DELETE RESTRICT;
-CREATE INDEX provider_acknowledgement_submission_id_ix ON intake.provider_acknowledgement (tenant_id, submission_id);
-ALTER TABLE intake.provider_acknowledgement ADD CONSTRAINT provider_acknowledgement_appointment_id_fk FOREIGN KEY (tenant_id, property_id, appointment_id) REFERENCES scheduling.appointment (tenant_id, property_id, appointment_id) ON DELETE RESTRICT;
-CREATE INDEX provider_acknowledgement_appointment_id_ix ON intake.provider_acknowledgement (tenant_id, property_id, appointment_id);
-ALTER TABLE intake.provider_acknowledgement ADD CONSTRAINT provider_acknowledgement_staff_id_fk FOREIGN KEY (tenant_id, staff_id) REFERENCES workforce.staff (tenant_id, staff_id) ON DELETE RESTRICT;
-CREATE INDEX provider_acknowledgement_staff_id_ix ON intake.provider_acknowledgement (tenant_id, staff_id);
-ALTER TABLE intake.provider_acknowledgement ADD CONSTRAINT provider_acknowledgement_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
-ALTER TABLE intake.provider_acknowledgement ADD CONSTRAINT provider_acknowledgement_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
 ALTER TABLE intake.treatment_note ADD CONSTRAINT treatment_note_appointment_id_fk FOREIGN KEY (tenant_id, property_id, appointment_id) REFERENCES scheduling.appointment (tenant_id, property_id, appointment_id) ON DELETE RESTRICT;
 CREATE INDEX treatment_note_appointment_id_ix ON intake.treatment_note (tenant_id, property_id, appointment_id);
 ALTER TABLE intake.treatment_note ADD CONSTRAINT treatment_note_provider_staff_id_fk FOREIGN KEY (tenant_id, provider_staff_id) REFERENCES workforce.staff (tenant_id, staff_id) ON DELETE RESTRICT;
@@ -196,10 +120,7 @@ CREATE INDEX treatment_note_supersedes_note_id_ix ON intake.treatment_note (tena
 ALTER TABLE intake.treatment_note ADD CONSTRAINT treatment_note_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE intake.treatment_note ADD CONSTRAINT treatment_note_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
 
-CREATE TRIGGER form_template_touch BEFORE UPDATE ON intake.form_template FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER form_version_touch BEFORE UPDATE ON intake.form_version FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER form_assignment_touch BEFORE UPDATE ON intake.form_assignment FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
+CREATE TRIGGER form_definition_touch BEFORE UPDATE ON intake.form_definition FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
 CREATE TRIGGER intake_submission_touch BEFORE UPDATE ON intake.intake_submission FOR EACH ROW EXECUTE FUNCTION core.touch_versioned();
-CREATE TRIGGER provider_acknowledgement_append_only BEFORE UPDATE OR DELETE ON intake.provider_acknowledgement FOR EACH ROW EXECUTE FUNCTION core.forbid_mutation();
 CREATE TRIGGER treatment_note_append_only BEFORE UPDATE OR DELETE ON intake.treatment_note FOR EACH ROW EXECUTE FUNCTION core.forbid_mutation();
-CREATE INDEX form_assignment_appointment_ix ON intake.form_assignment (tenant_id, appointment_id) WHERE status <> 'Waived';
+CREATE INDEX intake_submission_appointment_ix ON intake.intake_submission (tenant_id, appointment_id) WHERE status <> 'Superseded';

@@ -1,12 +1,11 @@
-"""guest: tenant-wide identity (IDN-005), contact, household, delegation, consent, privacy."""
+"""guest: tenant-wide identity (IDN-005), contact points, relationships, merges, delegation, consent, privacy."""
 from dsl import *
 
 S = "guest"
 
 table(S, "guest", AGGREGATE, TENANT, key=None,
       spec="§43 Guest identity, household and delegated authority; IDN-001/002/004/005",
-      doc="One person, recognised across the tenant's properties. Never merged silently (IDN-001): "
-          "a merge sets merged_into_guest_id and is reversible through guest_merge_case.",
+      doc="One person, recognised across the tenant's properties. Never merged silently (IDN-001).",
       statuses=["Active", "Restricted", "Merged", "Deceased", "Erased"],
       cols=[
           col("principal_id", "uuid", null=True, fk="core.principal", doc="set once the guest signs in (magic link)"),
@@ -14,8 +13,12 @@ table(S, "guest", AGGREGATE, TENANT, key=None,
           col("legal_first_name", "text", null=True),
           col("legal_last_name", "text", null=True),
           col("preferred_name", "text", null=True),
+          col("display_alias", "text", null=True, doc="IDN-002 privacy alias shown instead of the legal name"),
+          col("public_queue_id", "text", null=True, doc="IDN-002 public identifier for queues and screens"),
           col("birth_date", "date", null=True, restricted=True, doc="minor/guardian rules (IDN-004)"),
           col("locale", "text", null=True),
+          col("preferences", "jsonb", default="'{}'",
+              doc="operational preferences (pressure, music, provider gender); health data is refused here - it is intake"),
           col("merged_into_guest_id", "uuid", null=True, fk="guest.guest.guest_id"),
       ],
       checks=[("merge_consistent", "(status = 'Merged') = (merged_into_guest_id IS NOT NULL)"),
@@ -24,13 +27,15 @@ table(S, "guest", AGGREGATE, TENANT, key=None,
       indexes=[
           "guest_name_trgm_ix ON guest.guest USING gin ((coalesce(legal_last_name, '') || ' ' || coalesce(legal_first_name, '') "
           "|| ' ' || coalesce(preferred_name, '')) gin_trgm_ops) WHERE status IN ('Active', 'Restricted')",
+          "UNIQUE guest_public_queue_id_uq ON guest.guest (tenant_id, public_queue_id) WHERE public_queue_id IS NOT NULL",
       ],
-      dropped=[("contact_cipher", "guest_contact_point (one entity per contact point)")])
+      dropped=[("contact_cipher", "guest_contact_point"), ("privacy_alias (table)", "display_alias/public_queue_id"),
+               ("guest_preference (table)", "preferences jsonb")])
 
 table(S, "guest_contact_point", AGGREGATE, TENANT, key=None, handoff="completed",
       spec="UX-002 universal search by phone/email; SEC-011 verified contact methods",
-      doc="lookup_hash is an HMAC of the normalised value (key in Key Vault), so search works without decrypting.",
-      statuses=["Active", "Retired"], effective=False,
+      doc="lookup_hash is an HMAC of the normalised value (key in Key Vault): searchable without decrypting.",
+      statuses=["Active", "Retired", "Suppressed"],
       cols=[
           col("guest_id", "uuid", fk="guest.guest"),
           col("contact_type", "text", check="contact_type IN ('Email', 'Mobile', 'Phone', 'Address')"),
@@ -40,38 +45,25 @@ table(S, "guest_contact_point", AGGREGATE, TENANT, key=None, handoff="completed"
           col("display_hint", "text", doc="masked form for screens, e.g. j***@example.com"),
           col("is_primary", "boolean", default="false"),
           col("verified_at", "timestamptz", null=True),
+          col("suppression_reason", "text", null=True, check="suppression_reason IN ('Bounce', 'Complaint', 'Invalid')"),
       ],
-      indexes=["guest_contact_point_lookup_ix ON guest.guest_contact_point (tenant_id, contact_type, lookup_hash) WHERE status = 'Active'",
+      checks=[("suppressed_explained", "(status = 'Suppressed') = (suppression_reason IS NOT NULL)")],
+      indexes=["guest_contact_point_lookup_ix ON guest.guest_contact_point (tenant_id, contact_type, lookup_hash) WHERE status <> 'Retired'",
                "UNIQUE guest_contact_point_primary_uq ON guest.guest_contact_point (tenant_id, guest_id, contact_type) "
                "WHERE is_primary AND status = 'Active'"],
-)
+      dropped=[("message_suppression (table)", "status 'Suppressed' on the contact point; opt-outs are consent revocations")])
 
-table(S, "guest_household", AGGREGATE, TENANT, key=None, handoff="completed", spec="§43 Relationships: household",
-      statuses=["Active", "Dissolved"],
-      cols=[
-          col("household_name", "text"),
-          col("primary_guest_id", "uuid", fk="guest.guest.guest_id"),
-      ],
-      dropped=[("guest_id/starts_at/ends_at", "membership is guest_household_member")])
-
-table(S, "guest_household_member", MASTER, TENANT, key=None, handoff="new",
-      statuses=["Active", "Ended"],
-      cols=[
-          col("guest_household_id", "uuid", fk="guest.guest_household"),
-          col("guest_id", "uuid", fk="guest.guest"),
-          col("member_role", "text", check="member_role IN ('Primary', 'Adult', 'Minor', 'Dependent')"),
-      ],
-      uniques=[("member_uq", "tenant_id, guest_household_id, guest_id, effective_from")])
-
-table(S, "guest_relationship", MASTER, TENANT, key=None, handoff="completed", spec="§43 Relationships",
+table(S, "guest_relationship", MASTER, TENANT, key=None, handoff="completed (absorbs guest_household)",
+      spec="§43 Relationships",
       statuses=["Active", "Ended"],
       cols=[
           col("guest_id", "uuid", fk="guest.guest"),
           col("related_guest_id", "uuid", fk="guest.guest.guest_id"),
-          col("relationship_type", "text", check="relationship_type IN ('SpousePartner', 'ParentGuardian', 'Child', "
-                                                 "'Dependent', 'Assistant', 'Organizer', 'Payer', 'Recipient', 'EmergencyContact')"),
+          col("relationship_type", "text", check="relationship_type IN ('Household', 'SpousePartner', 'ParentGuardian', 'Child', "
+                                                 "'Dependent', 'Assistant', 'Organizer', 'Payer', 'EmergencyContact')"),
       ],
       checks=[("not_self", "guest_id <> related_guest_id")],
+      dropped=[("guest_household, guest_household_member (tables)", "relationship_type 'Household'")],
       extra_sql="""
 ALTER TABLE guest.guest_relationship ADD CONSTRAINT guest_relationship_no_overlap
     EXCLUDE USING gist (tenant_id WITH =, guest_id WITH =, related_guest_id WITH =, relationship_type WITH =,
@@ -79,23 +71,9 @@ ALTER TABLE guest.guest_relationship ADD CONSTRAINT guest_relationship_no_overla
     WHERE (status = 'Active');
 """)
 
-table(S, "guest_preference", AGGREGATE, TENANT_OPT, pk="preference_id", key=None, source_cols=False,
-      spec="IDN-005 property-specific preferences; DEC-004 (health stays in intake)",
-      statuses=["Active", "Expired", "Retired"],
-      cols=[
-          col("guest_id", "uuid", fk="guest.guest"),
-          col("category", "text"),
-          col("value_json", "jsonb"),
-          col("strength", "text", check="strength IN ('Required', 'Preferred', 'Avoid')"),
-          col("source", "text", check="source IN ('Guest', 'Staff', 'Import')"),
-          col("privacy_class", "text", check="privacy_class IN ('Operational', 'Personal')",
-              doc="clinical data is refused here by design; it belongs to intake"),
-          col("observed_at", "timestamptz", default="now()"),
-          col("expires_at", "timestamptz", null=True),
-      ])
-
 table(S, "guest_merge_case", AGGREGATE, TENANT, key=None, handoff="completed",
-      spec="IDN-001; Closure_and_Acceptance/IDENTITY_MERGE_SPLIT_CONTROL.md",
+      spec="IDN-001; IDENTITY_MERGE_SPLIT_CONTROL.md",
+      doc="Kept typed: a reviewed, reversible merge is evidence with its own lifecycle.",
       statuses=["Candidate", "Approved", "Merged", "Rejected", "Split"],
       cols=[
           col("surviving_guest_id", "uuid", fk="guest.guest.guest_id"),
@@ -111,30 +89,16 @@ table(S, "guest_merge_case", AGGREGATE, TENANT, key=None, handoff="completed",
       ],
       checks=[("distinct_guests", "surviving_guest_id <> duplicate_guest_id"),
               ("human_reviewed", "status NOT IN ('Approved', 'Merged') OR reviewed_by IS NOT NULL"),
-              ("split_explained", "status <> 'Split' OR (split_at IS NOT NULL AND split_reason IS NOT NULL)")],
-      dropped=[("guest_id", "surviving_guest_id/duplicate_guest_id")])
-
-table(S, "privacy_alias", MASTER, TENANT, key=None, handoff="completed", spec="IDN-002",
-      doc="Display alias and public queue identifier, exposed instead of legal name where purpose allows.",
-      statuses=["Active", "Retired"],
-      cols=[
-          col("guest_id", "uuid", fk="guest.guest"),
-          col("alias_type", "text", check="alias_type IN ('DisplayAlias', 'PublicQueueId')"),
-          col("alias_value", "text"),
-      ],
-      indexes=["UNIQUE privacy_alias_value_uq ON guest.privacy_alias (tenant_id, alias_type, alias_value) WHERE status = 'Active'"],
-)
+              ("split_explained", "status <> 'Split' OR (split_at IS NOT NULL AND split_reason IS NOT NULL)")])
 
 table(S, "delegated_authority", MASTER, TENANT, key=None, handoff="completed",
       spec="IDN-003 (explicit scope, actions, financial limit, visibility, expiry, revocation, evidence)",
-      doc="A delegate acts only within what is written here and never inherits health data by relationship. "
-          "Mirrored to OpenFGA as a conditional tuple (time_bound).",
+      doc="A delegate acts only within what is written here. Mirrored to OpenFGA as a conditional tuple.",
       statuses=["Active", "Revoked", "Expired"],
       cols=[
           col("guest_id", "uuid", fk="guest.guest", doc="the guest whose affairs are delegated"),
           col("delegate_guest_id", "uuid", null=True, fk="guest.guest.guest_id"),
           col("delegate_principal_id", "uuid", null=True, fk="core.principal"),
-          col("guest_relationship_id", "uuid", null=True, fk="guest.guest_relationship"),
           col("allowed_actions", "text[]",
               check="allowed_actions <@ ARRAY['Book', 'Cancel', 'Reschedule', 'Pay', 'ViewItinerary', 'CompleteIntake']::text[] "
                     "AND cardinality(allowed_actions) > 0"),
@@ -156,7 +120,8 @@ table(S, "delegated_authority", MASTER, TENANT, key=None, handoff="completed",
 
 table(S, "consent_record", AGGREGATE, TENANT_OPT, pk="consent_id", key=None, source_cols=False, effective=False,
       spec="§24 Privacy purpose/consent; DEC-008; IDN-004 guardian consent",
-      doc="Consent evidence is immutable once written; only revocation may change afterwards (trigger-enforced).",
+      doc="Consent evidence is immutable once written; only revocation may change afterwards (trigger-enforced). "
+          "An SMS STOP or unsubscribe is a revocation.",
       statuses=["Active", "Revoked", "Expired"],
       cols=[
           col("guest_id", "uuid", fk="guest.guest"),
@@ -194,7 +159,7 @@ CREATE TRIGGER consent_record_immutable BEFORE UPDATE ON guest.consent_record
 """)
 
 table(S, "privacy_request", AGGREGATE, TENANT, key=None, handoff="completed",
-      spec="IDN-006; §AI lawful operation, manager overrides and guest erasure",
+      spec="IDN-006; §Guest erasure",
       statuses=["Received", "Verified", "InProgress", "Fulfilled", "Rejected", "OnHold"],
       cols=[
           col("guest_id", "uuid", fk="guest.guest"),
@@ -209,8 +174,7 @@ table(S, "privacy_request", AGGREGATE, TENANT, key=None, handoff="completed",
           col("rejection_reason", "text", null=True),
       ],
       checks=[("fulfilled_complete", "(status = 'Fulfilled') = (fulfilled_at IS NOT NULL)"),
-              ("rejected_explained", "status <> 'Rejected' OR rejection_reason IS NOT NULL")],
-      dropped=[("effective_from/effective_to", "requested_at/due_at")])
+              ("rejected_explained", "status <> 'Rejected' OR rejection_reason IS NOT NULL")])
 
 table(S, "guest_magic_link", CHILD, TENANT, handoff="new",
       spec="SEC-010 (signed, short-lived, revocable, purpose-limited); SEC-011",
@@ -218,8 +182,7 @@ table(S, "guest_magic_link", CHILD, TENANT, handoff="new",
       cols=[
           col("guest_id", "uuid", fk="guest.guest"),
           col("principal_id", "uuid", fk="core.principal"),
-          col("guest_contact_point_id", "uuid", fk="guest.guest_contact_point",
-              doc="the verified contact the link was sent to"),
+          col("guest_contact_point_id", "uuid", fk="guest.guest_contact_point"),
           col("token_hash", "bytea", check="octet_length(token_hash) = 32"),
           col("purpose", "text", check="purpose IN ('SignIn', 'ManageBooking', 'CompleteIntake', 'Pay')"),
           col("scope_entity_type", "text", null=True),

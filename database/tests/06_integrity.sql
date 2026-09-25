@@ -50,26 +50,53 @@ DO $$ BEGIN
     RAISE EXCEPTION 'a delegation granting health access was accepted';
 EXCEPTION WHEN check_violation THEN NULL; END $$;
 
--- Money: the line total is derived, never supplied.
-INSERT INTO scheduling.appointment_line (tenant_id, property_id, appointment_id, line_number, line_type, description,
-       quantity, unit_price_minor, currency_code)
-VALUES ('a0000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-0000000000b1',
-        1, 'Service', 'Massage 60', 1.5, 45000, 'AED');
+-- Settings: one active value per key and scope, and never approved by its author (SEC-014).
+INSERT INTO core.setting (tenant_id, property_id, setting_key, value_json, status, approved_by, approved_at, created_by)
+VALUES ('a0000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-000000000000', 'policy.cancellation',
+        '{"free_until_hours": 24}', 'Active', 'a0000000-0000-7000-8000-00000000aa02', now(), 'a0000000-0000-7000-8000-00000000aa01');
 DO $$ BEGIN
-    ASSERT (SELECT line_total_minor FROM scheduling.appointment_line) = 67500, 'line total not derived';
-END $$;
+    INSERT INTO core.setting (tenant_id, property_id, setting_key, value_json, status, approved_by, approved_at, created_by)
+    VALUES ('a0000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-000000000000', 'policy.cancellation',
+            '{"free_until_hours": 12}', 'Active', 'a0000000-0000-7000-8000-00000000aa02', now(), 'a0000000-0000-7000-8000-00000000aa01');
+    RAISE EXCEPTION 'two active values for one setting were accepted';
+EXCEPTION WHEN exclusion_violation THEN NULL; END $$;
+DO $$ BEGIN
+    INSERT INTO core.setting (tenant_id, setting_key, value_json, status, approved_by, approved_at, created_by)
+    VALUES ('a0000000-0000-7000-8000-000000000000', 'feature.online_booking', 'true', 'Active',
+            'a0000000-0000-7000-8000-00000000aa01', now(), 'a0000000-0000-7000-8000-00000000aa01');
+    RAISE EXCEPTION 'a self-approved setting was accepted';
+EXCEPTION WHEN check_violation THEN NULL; END $$;
 
--- Hard conflicts can never be marked overridable.
+-- Commerce: a Draft order is the cart; its lines may be removed only while it is Draft.
+INSERT INTO commerce.commerce_order (commerce_order_id, tenant_id, property_id, guest_id, currency_code)
+VALUES ('a1000000-0000-7000-8000-0000000000d1', 'a0000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-000000000000',
+        'a0000000-0000-7000-8000-0000000000e1', 'AED');
+INSERT INTO commerce.order_line (tenant_id, property_id, commerce_order_id, line_number, line_kind, service_id,
+       appointment_id, description, quantity, unit_price_minor, net_minor)
+VALUES ('a0000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-0000000000d1',
+        1, 'Service', 'a0000000-0000-7000-8000-0000000000c1', 'a1000000-0000-7000-8000-0000000000b1', 'Massage 60', 1, 45000, 45000),
+       ('a0000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-0000000000d1',
+        2, 'Fee', NULL, NULL, 'Late fee', 1, 5000, 5000);
+DELETE FROM commerce.order_line WHERE line_number = 2;
+UPDATE commerce.commerce_order SET status = 'Open', ordered_at = now(), version = version + 1
+ WHERE commerce_order_id = 'a1000000-0000-7000-8000-0000000000d1';
 DO $$ BEGIN
-    INSERT INTO scheduling.schedule_change_proposal (schedule_change_proposal_id, tenant_id, property_id, appointment_id,
-           token_hash, proposed_start, proposed_end, from_version, expires_at)
-    VALUES ('a1000000-0000-7000-8000-0000000000f9', 'a0000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-000000000000',
-            'a1000000-0000-7000-8000-0000000000b1', repeat('b', 64), now(), now() + interval '1 hour', 1, now() + interval '90 seconds');
-    INSERT INTO scheduling.conflict_result (tenant_id, property_id, schedule_change_proposal_id, conflict_code, severity,
-           subject_type, override_allowed)
-    VALUES ('a0000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-000000000000',
-            'a1000000-0000-7000-8000-0000000000f9', 'CON-002', 'Hard', 'Room', true);
-    RAISE EXCEPTION 'an overridable hard conflict was accepted';
+    DELETE FROM commerce.order_line WHERE line_number = 1;
+    RAISE EXCEPTION 'a line of a placed order was deleted';
+EXCEPTION WHEN insufficient_privilege THEN NULL; END $$;
+
+-- A refund must name the transaction it returns and be approved by someone other than the requester.
+INSERT INTO commerce.payment_transaction (payment_transaction_id, tenant_id, property_id, commerce_order_id, tender_code,
+       transaction_type, outcome, amount_minor, currency_code, provider_code, processed_at, idempotency_key)
+VALUES ('a1000000-0000-7000-8000-0000000000d2', 'a0000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-000000000000',
+        'a1000000-0000-7000-8000-0000000000d1', 'Card', 'Sale', 'Approved', 45000, 'AED', 'pending-dec-010', now(), 'sale-0001');
+DO $$ BEGIN
+    INSERT INTO commerce.payment_intent (tenant_id, property_id, commerce_order_id, purpose, original_transaction_id,
+           amount_minor, currency_code, provider_code, status, approved_by, approved_at, created_by, idempotency_key)
+    VALUES ('a0000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-0000000000d1',
+            'Refund', 'a1000000-0000-7000-8000-0000000000d2', 45000, 'AED', 'pending-dec-010', 'Approved',
+            'a0000000-0000-7000-8000-00000000aa01', now(), 'a0000000-0000-7000-8000-00000000aa01', 'refund-0001');
+    RAISE EXCEPTION 'a self-approved refund was accepted';
 EXCEPTION WHEN check_violation THEN NULL; END $$;
 
 -- UUIDv7 default: version nibble 7, variant 10, time-ordered.

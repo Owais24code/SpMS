@@ -11,14 +11,9 @@ CREATE FUNCTION core.resolve_principal(p_issuer text, p_subject text)
 RETURNS TABLE (principal_id uuid, tenant_id uuid, principal_type text, status text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
     SELECT p.principal_id, p.tenant_id, p.principal_type, p.status
-      FROM workforce.provider_identity pi
-      JOIN core.principal p ON p.tenant_id = pi.tenant_id AND p.principal_id = pi.principal_id
-     WHERE pi.idp_issuer = p_issuer AND pi.idp_subject = p_subject AND pi.status = 'Active'
-    UNION ALL
-    SELECT p.principal_id, p.tenant_id, p.principal_type, p.status
-      FROM core.service_identity si
-      JOIN core.principal p ON p.tenant_id = si.tenant_id AND p.principal_id = si.principal_id
-     WHERE si.idp_issuer = p_issuer AND si.idp_subject = p_subject AND si.status = 'Active'
+      FROM core.principal_login l
+      JOIN core.principal p ON p.tenant_id = l.tenant_id AND p.principal_id = l.principal_id
+     WHERE l.idp_issuer = p_issuer AND l.idp_subject = p_subject AND l.status = 'Active'
 $$;
 
 -- Consume a guest magic link: single use, unexpired, unrevoked. Atomic, so two
@@ -46,20 +41,12 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
        AND a.guest_id = p_guest_id
        AND a.status NOT IN ('Cancelled', 'NoShow')
        AND tstzrange(a.start_at, a.end_at, '[)') && tstzrange(p_from, p_to, '[)')
-    UNION
-    SELECT a.property_id, a.appointment_id, a.start_at, a.end_at
-      FROM scheduling.appointment_participant ap
-      JOIN scheduling.appointment a ON a.tenant_id = ap.tenant_id AND a.appointment_id = ap.appointment_id
-     WHERE ap.tenant_id = core.current_tenant_id()
-       AND ap.guest_id = p_guest_id
-       AND a.status NOT IN ('Cancelled', 'NoShow')
-       AND tstzrange(a.start_at, a.end_at, '[)') && tstzrange(p_from, p_to, '[)')
 $$;
 
-GRANT USAGE ON SCHEMA core, workforce, guest, scheduling TO spms_definer;
-GRANT SELECT ON core.principal, core.service_identity, workforce.provider_identity TO spms_definer;
+GRANT USAGE ON SCHEMA core, guest, scheduling TO spms_definer;
+GRANT SELECT ON core.principal, core.principal_login TO spms_definer;
 GRANT SELECT, UPDATE (consumed_at) ON guest.guest_magic_link TO spms_definer;
-GRANT SELECT ON scheduling.appointment, scheduling.appointment_participant TO spms_definer;
+GRANT SELECT ON scheduling.appointment TO spms_definer;
 REVOKE ALL ON FUNCTION core.resolve_principal(text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION guest.resolve_magic_link(bytea) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION core.resolve_principal(text, text) TO spms_app;
@@ -99,9 +86,9 @@ END $$;
 REVOKE ALL ON FUNCTION core.redact_audit_subject(text, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION core.redact_audit_subject(text, uuid) TO spms_erasure;
 
--- Controlled deletion of transient rows the app may remove (expired holds and
--- drafts). Everything else is status + audit, never DELETE (no hard delete).
-GRANT DELETE ON scheduling.availability_hold, commerce.cart_line, core.idempotency_record TO spms_app;
+-- Controlled deletion of transient rows: lines of a Draft order (a cart) and
+-- expired idempotency claims. order_line refuses DELETE once its order leaves Draft. Everything else is status + audit, never DELETE (no hard delete).
+GRANT DELETE ON commerce.order_line, core.idempotency_record TO spms_app;
 
 -- Partitions are reached only through their parent, whose grants and policies
 -- apply; no role other than the owner holds privileges on a partition itself.

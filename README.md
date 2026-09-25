@@ -45,7 +45,7 @@ unless `SPMS_TEST_CONNECTION` is set. CI sets it explicitly for that reason.
 
 ### Modular monolith
 
-Everything deploys as one process with one database. It is organised as twelve modules, and
+Everything deploys as one process with one database. It is organised as eleven modules, and
 each module owns one PostgreSQL schema. At pilot scale (one property, 1,500 appointments a
 day, per DEC-007), splitting into services would add network failure modes and distributed
 transactions and buy nothing in return.
@@ -58,26 +58,24 @@ enforces it again in the database.
 core ─┬─ catalog ─┬─ resources ─┐
       │           └─ workforce ─┤
       └─ guest ─────────────────┴─ scheduling ─┬─ intake
-                                               ├─ visit ─────┐
-                                               ├─ inventory ─┴─ commerce
+                                               ├─ inventory ─ commerce
                                                └─ messaging
-core ── reporting   (facts are denormalised: no FKs outside core)
+core ── reporting
 ```
 
-| Module | Owns |
-|---|---|
-| core | tenant, property, principal and identity links, capability ownership (DEC-001), configuration, audit, outbox/inbox, idempotency, retention, legal hold |
-| catalog | services and versions, per-property offering, options, protocols, sellable items, prices, tax |
-| resources | facilities, locations, rooms and equipment, schedules, maintenance, sanitation |
-| workforce | staff, HR profile, Entra links, roles, qualifications (CON-003), credentials, documents, schedules, screening |
-| guest | tenant-wide guest (IDN-005), contact points, household, relationships, merge cases, aliases, delegation (IDN-003), consent, privacy requests, magic links |
-| scheduling | appointments, resource assignments (CON-001/002), lines, participants, status history, itineraries, holds, preflight proposals and conflicts, waitlist, turnaround |
-| intake | forms, intake submissions, provider acknowledgements, treatment notes (restricted: SEC-008) |
-| visit | visit, participants, appointment links, events, exceptions |
-| inventory | items, variants, lots, balances, stock ledger, transfers, laundry, recipes, forecast, counts, product use |
-| commerce | carts, orders, payment intents and transactions (provider-agnostic, DEC-010 open), refunds, deposits, receipts, Marquee delegation |
-| messaging | templates and versions, reminder rules, scheduled messages, deliveries, suppression, inbound |
-| reporting | report runs, schedules, fact stream |
+| Module | Tables | Owns |
+|---|---:|---|
+| core | 15 | tenant, property, principal + logins, devices, capability ownership (DEC-001), governed settings, code lists, audit + seals, outbox/inbox, idempotency, external mappings, legal hold |
+| catalog | 4 | services, per-property offering, options, tax |
+| resources | 3 | locations, rooms, maintenance windows |
+| workforce | 7 | staff, HR profile (kept apart, SEC-007), roles, credentials (incl. screening), documents, qualifications (CON-003), schedule and leave |
+| guest | 8 | tenant-wide guest (IDN-005), contact points, relationships, merge cases, delegation (IDN-003), consent, privacy requests, magic links |
+| scheduling | 6 | visit (the day plan), appointments with room and provider (CON-001/002), preflight proposals, waitlist, turnaround, visit exceptions |
+| intake | 3 | versioned forms, submissions, treatment notes (restricted: SEC-008) |
+| inventory | 7 | items, variants, balances, stock ledger, laundry batches, service supplies, counts |
+| commerce | 5 | orders (a Draft is the cart), lines, payment intents (payments, deposits, refunds), transactions, Marquee delegation |
+| messaging | 2 | versioned templates with reminder timing, scheduled messages with delivery state |
+| reporting | 1 | saved report runs |
 
 **Backend layout.** Today it is still layer-per-project (`Spms.Domain`, `Spms.Infrastructure`,
 `Spms.Infrastructure.Postgres`, `Spms.Api`). The next step is a `Spms.Host` composition root,
@@ -91,7 +89,7 @@ split waits on a .NET toolchain; see Status.
 2. **Application.** EF Core `HasQueryFilter` on `tenant_id`/`property_id`, plus a
    `SaveChangesInterceptor` that stamps them. A new endpoint cannot forget to scope.
 3. **Database (RLS).** Every table carrying `tenant_id` has row-level security **enabled and
-   forced**, 123 of 123. Each request opens a transaction and calls
+   forced**, 61 of 61. Each request opens a transaction and calls
    `core.begin_scope(tenant, property_ids[], principal, correlation)`, which sets
    transaction-local settings. A pooled connection cannot carry one request's tenant into
    the next. With no scope set, nothing is visible.
@@ -108,8 +106,20 @@ exactly this structure, and a CI drift check (pg_dump diff) compares the two onc
 model lands. Structures EF cannot model are written with `migrationBuilder.Sql()` in the same
 migration: exclusion constraints, triggers, RLS and SECURITY DEFINER functions.
 
-**Scope:** R1 in full. That is 123 tables in 12 schemas: 47 handoff tables kept as they were,
-65 handoff stubs completed from the spec text, and 11 new.
+**Scope:** R1 in full, in **61 tables across 11 schemas**. The first draft had 123. It was
+refactored to one table per entity using five rules:
+
+1. History and version tables become the audit trail.
+2. Template + version pairs become one versioned row.
+3. Duplicate concepts get one owner. A cart is a Draft order, a hold is a Held appointment, the
+   itinerary is the visit, and refunds and deposits are payment intents.
+4. 1:N link tables and small child tables become columns or `jsonb` on the parent.
+5. Governed configuration and simple lookups get one mechanism each: `core.setting` and
+   `core.code_list`.
+
+Typed tables remain wherever the database must enforce something or the spec requires
+separation. `catalog.json` lists every removed table and column with its replacement.
+`01_structure.sql` asserts the count, so adding a table is a deliberate change.
 
 ### Conventions
 
@@ -123,15 +133,16 @@ migration: exclusion constraints, triggers, RLS and SECURITY DEFINER functions.
 | Lifecycle | Status + audit. **No hard delete** and no `deleted_at`. Removal happens only through retention and erasure jobs. The runtime role holds DELETE on three transient tables only |
 | Concurrency | `version` must advance by exactly 1 on every update of a versioned row. This is enforced by trigger (SQLSTATE 40001), not only by the ORM (DEC-005) |
 | Append-only | Audit, ledgers, status history, treatment notes, deliveries and facts. UPDATE/DELETE **raise** (the trigger stops even the owner). The only exception is `core.redact_*` for erasure |
-| Partitioning | Monthly range partitions on `audit_event`, `event_outbox`, `inventory_ledger_entry`, `message_delivery` and `reporting_fact`. They are created ahead by `core.ensure_monthly_partitions`, and the DEFAULT partition must stay empty |
+| Partitioning | Monthly range partitions on `audit_event`, `event_outbox` and `inventory_ledger_entry`. They are created ahead by `core.ensure_monthly_partitions`, and the DEFAULT partition must stay empty |
 | Restricted data | Intake answers, treatment notes, contact values, credential numbers and consent evidence are `*_cipher bytea` + `key_version`: app-level envelope encryption with Key Vault-wrapped keys. Search uses HMAC `lookup_hash` columns |
-| Cross-module FKs | Only along the DAG. For example, `appointment.visit_id` is gone and `visit.visit_appointment` links the other way |
+| Cross-module FKs | Only along the DAG |
+| Settings & code lists | `core.setting`: effective-dated, one active value per key and scope, approved by someone other than the author. Used for feature flags, policies, retention and quiet hours. `core.code_list`: reason codes, tenders, license types, departments and revenue centres. Tax, capability ownership and legal hold stay typed |
 
 ### Hard rules the database enforces on its own
 
-- **CON-002.** A room or piece of equipment cannot hold two bookings. This is a GiST
-  exclusion on `appointment_resource_assignment` over `[starts_at, ends_at)`. Cancelling an
-  appointment releases its assignments in the same statement.
+- **CON-002.** A room cannot hold two treatments. This is a GiST exclusion on
+  `scheduling.appointment (room_id, [start_at, end_at))`, ignoring Cancelled and NoShow rows,
+  so a cancellation frees the room at once.
 - **CON-001 is soft.** Provider overlap is indexed, not constrained, so an audited override
   stays possible.
 - **CON-005 is tenant-wide.** `scheduling.guest_busy_intervals()` sees every property of the
@@ -166,10 +177,12 @@ files, all passing:
 - structure: forced RLS, ownership, DELETE grants, FK index coverage, DAG, append-only
   triggers, partitions, exclusions
 - RLS isolation run as `spms_app`
-- scheduling: CON-002, CON-001, same-property FK, version, release on cancel, CON-005
+- scheduling: CON-002, CON-001, same-property room, version, cancel frees the room, hold
+  expiry, hard conflicts never overridden, CON-005
 - append-only and redaction
 - identity resolution and single-use magic links
-- integrity: DEC-001, SEC-014, consent, IDN-003, derived money, hard conflicts, UUIDv7
+- integrity: DEC-001, SEC-014 on settings and refunds, consent, IDN-003, draft-only line
+  deletion, UUIDv7
 
 ---
 
@@ -177,9 +190,9 @@ files, all passing:
 
 | Layer | Question | Mechanism |
 |---|---|---|
-| Authentication, staff | Who is calling? | **Microsoft Entra ID**, JWT bearer (`scp`/`roles`). `(issuer, oid)` resolves to a `core.principal` through `core.resolve_principal()` |
+| Authentication, staff | Who is calling? | **Microsoft Entra ID**, JWT bearer (`scp`/`roles`). `(issuer, oid)` in `core.principal_login` resolves to a `core.principal` through `core.resolve_principal()` |
 | Authentication, guests | Who is calling? | **Own magic links** (SEC-010/011): short-lived, single-use and purpose-limited. Only the SHA-256 is stored, and `guest.resolve_magic_link()` consumes it atomically |
-| Authentication, services | Who is calling? | Entra client credentials, linked through `core.service_identity` |
+| Authentication, services | Who is calling? | Entra client credentials, linked through `core.principal_login` |
 | Coarse gate | May this client call this API family? | `spa.*` scopes in the token |
 | Fine authorization | May this principal do this to this object? | **OpenFGA** (`authorization/model.fga`) |
 | Last line | Even if the app is wrong, what cannot leak? | PostgreSQL RLS |
@@ -291,7 +304,7 @@ alternative, but it is a different resource.
 
 | Area | State |
 |---|---|
-| R1 schema design (123 tables) | Done; verified on PostgreSQL 16 |
+| R1 schema design (61 tables, refactored from 123) | Done; verified on PostgreSQL 16 |
 | RLS, roles, scope functions | Done; verified |
 | OpenFGA model, tests, hosting template | Done; verified (model tests, live smoke, bicep build) |
 | Repository layout (`backend/`, `frontend/`) | Done |
