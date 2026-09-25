@@ -1,0 +1,69 @@
+-- Shared fixture. Included by each test inside its own transaction (rolled back).
+-- Inserted as the connecting superuser, which bypasses RLS; the tests then SET ROLE
+-- spms_app so every assertion runs under the policies the API runs under.
+--
+--   tenant A: properties A1, A2      tenant B: property B1
+\set ON_ERROR_STOP 1
+
+INSERT INTO core.tenant (tenant_id, code, name, data_region) VALUES
+  ('a0000000-0000-7000-8000-000000000000', 'tenant-a', 'Tenant A', 'eu'),
+  ('b0000000-0000-7000-8000-000000000000', 'tenant-b', 'Tenant B', 'eu');
+
+INSERT INTO core.property (property_id, tenant_id, code, name, timezone, currency_code) VALUES
+  ('a1000000-0000-7000-8000-000000000000', 'a0000000-0000-7000-8000-000000000000', 'a1', 'A One', 'Asia/Dubai', 'AED'),
+  ('a2000000-0000-7000-8000-000000000000', 'a0000000-0000-7000-8000-000000000000', 'a2', 'A Two', 'Asia/Dubai', 'AED'),
+  ('b1000000-0000-7000-8000-000000000000', 'b0000000-0000-7000-8000-000000000000', 'b1', 'B One', 'Europe/London', 'GBP');
+
+INSERT INTO core.principal (principal_id, tenant_id, principal_type, display_name) VALUES
+  ('a0000000-0000-7000-8000-00000000aa01', 'a0000000-0000-7000-8000-000000000000', 'Staff', 'Provider One'),
+  ('a0000000-0000-7000-8000-00000000aa02', 'a0000000-0000-7000-8000-000000000000', 'Guest', 'Guest One'),
+  ('b0000000-0000-7000-8000-00000000bb01', 'b0000000-0000-7000-8000-000000000000', 'Staff', 'B Staff');
+
+INSERT INTO workforce.staff (staff_id, tenant_id, principal_id, home_property_id, preferred_name) VALUES
+  ('a0000000-0000-7000-8000-0000000000f1', 'a0000000-0000-7000-8000-000000000000', 'a0000000-0000-7000-8000-00000000aa01',
+   'a1000000-0000-7000-8000-000000000000', 'Provider One');
+
+INSERT INTO workforce.provider_identity (tenant_id, staff_id, principal_id, username, idp_issuer, idp_subject) VALUES
+  ('a0000000-0000-7000-8000-000000000000', 'a0000000-0000-7000-8000-0000000000f1', 'a0000000-0000-7000-8000-00000000aa01',
+   'provider.one', 'https://login.microsoftonline.com/t/v2.0', 'oid-provider-one');
+
+INSERT INTO catalog.service (service_id, tenant_id, code, name, duration_minutes, currency_code) VALUES
+  ('a0000000-0000-7000-8000-0000000000c1', 'a0000000-0000-7000-8000-000000000000', 'MASSAGE60', 'Massage 60', 60, 'AED'),
+  ('b0000000-0000-7000-8000-0000000000c1', 'b0000000-0000-7000-8000-000000000000', 'MASSAGE60', 'Massage 60', 60, 'GBP');
+
+INSERT INTO catalog.service_version (service_version_id, tenant_id, service_id, version_number, service_name,
+                                     duration_minutes, price_minor, currency_code, status, published_at, published_by) VALUES
+  ('a0000000-0000-7000-8000-0000000000d1', 'a0000000-0000-7000-8000-000000000000', 'a0000000-0000-7000-8000-0000000000c1',
+   1, 'Massage 60', 60, 45000, 'AED', 'Published', now(), 'a0000000-0000-7000-8000-00000000aa01'),
+  ('b0000000-0000-7000-8000-0000000000d1', 'b0000000-0000-7000-8000-000000000000', 'b0000000-0000-7000-8000-0000000000c1',
+   1, 'Massage 60', 60, 9000, 'GBP', 'Published', now(), 'b0000000-0000-7000-8000-00000000bb01');
+
+INSERT INTO guest.guest (guest_id, tenant_id, principal_id, legal_first_name, legal_last_name) VALUES
+  ('a0000000-0000-7000-8000-0000000000e1', 'a0000000-0000-7000-8000-000000000000', 'a0000000-0000-7000-8000-00000000aa02', 'Guest', 'One'),
+  ('b0000000-0000-7000-8000-0000000000e1', 'b0000000-0000-7000-8000-000000000000', NULL, 'Guest', 'Bee');
+
+INSERT INTO resources.resource (resource_id, tenant_id, property_id, resource_type, code, name) VALUES
+  ('a1000000-0000-7000-8000-0000000000a1', 'a0000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-000000000000',
+   'TreatmentRoom', 'R1', 'A1 Room 1'),
+  ('a1000000-0000-7000-8000-0000000000a2', 'a0000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-000000000000',
+   'TreatmentRoom', 'R2', 'A1 Room 2'),
+  ('a2000000-0000-7000-8000-0000000000a1', 'a0000000-0000-7000-8000-000000000000', 'a2000000-0000-7000-8000-000000000000',
+   'TreatmentRoom', 'R1', 'A2 Room 1');
+
+-- One confirmed appointment at A1, 10:00-11:00 UTC tomorrow, in Room 1 with Provider One.
+INSERT INTO scheduling.appointment (appointment_id, tenant_id, property_id, confirmation_number, guest_id, service_id,
+                                    service_version_id, duration_minutes, start_at, end_at, entered_timezone, source,
+                                    currency_code, status) VALUES
+  ('a1000000-0000-7000-8000-0000000000b1', 'a0000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-000000000000',
+   'A1-0001', 'a0000000-0000-7000-8000-0000000000e1', 'a0000000-0000-7000-8000-0000000000c1',
+   'a0000000-0000-7000-8000-0000000000d1', 60, date_trunc('day', now()) + interval '1 day 10 hours',
+   'epoch', 'Asia/Dubai', 'Desk', 'AED', 'Confirmed');
+
+INSERT INTO scheduling.appointment_resource_assignment (tenant_id, property_id, appointment_id, assignment_role,
+                                                        resource_id, staff_id, starts_at, ends_at) VALUES
+  ('a0000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-0000000000b1',
+   'Room', 'a1000000-0000-7000-8000-0000000000a1', NULL,
+   date_trunc('day', now()) + interval '1 day 10 hours', date_trunc('day', now()) + interval '1 day 11 hours'),
+  ('a0000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-000000000000', 'a1000000-0000-7000-8000-0000000000b1',
+   'Provider', NULL, 'a0000000-0000-7000-8000-0000000000f1',
+   date_trunc('day', now()) + interval '1 day 10 hours', date_trunc('day', now()) + interval '1 day 11 hours');

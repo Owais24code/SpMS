@@ -6,15 +6,19 @@
 # reviewer can watch run from a clean checkout against a real PostgreSQL is the
 # thing a traceability register can point at.
 #
-# Three jobs, deliberately separate so a failure names itself:
+# Five jobs, deliberately separate so a failure names itself:
 #
-#   backendthe solution built warnings-as-errors, then 150 xunit tests against a
-#         real postgres:16 — the migrations, the GiST exclusion constraint and
-#         the unit of work cannot be exercised by anything else — then the HTTP
-#         acceptance sweep against a freshly started instance.
-#   frontendthe Angular production build and the contrast audit.
-#   bicep the deployment template compiled, so a broken template is caught here
-#         rather than half way through a deploy.
+#   api       the solution built warnings-as-errors, then 150 xunit tests against a
+#             real postgres:16 - the migrations, the GiST exclusion constraint and
+#             the unit of work cannot be exercised by anything else - then the HTTP
+#             acceptance sweep against a freshly started instance.
+#   web       the Angular production build and the contrast audit.
+#   database  the R1 reference schema regenerated (must match the committed SQL),
+#             built on postgres:16 and its SQL tests run: RLS, CON-002, append-only,
+#             identity resolution, integrity.
+#   authz     the OpenFGA model validated and its tests run.
+#   bicep     every deployment template compiled, so a broken template is caught
+#             here rather than half way through a deploy.
 #
 # Everything the API job needs is vendored: backend/vendor/nuget holds the package
 # closure and backend/NuGet.config clears the public feeds, so the restore is
@@ -184,3 +188,48 @@ jobs:
           curl -fsSL -o bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
           chmod +x bicep
           ./bicep build infra/main.bicep --outfile /dev/null
+          ./bicep build infra/openfga.bicep --outfile /dev/null
+
+  database:
+    name: Database - R1 schema and SQL tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: spms
+          POSTGRES_DB: spms_verify
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install psql
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      # verify.sh first checks the committed SQL is exactly what the model generates,
+      # so a hand edit to database/schema cannot slip through.
+      - name: Build schema and run tests
+        env:
+          PGURL: postgresql://postgres:spms@localhost:5432/spms_verify
+        run: database/tools/verify.sh
+
+  authz:
+    name: Authorization - OpenFGA model tests
+    runs-on: ubuntu-latest
+    env:
+      FGA_VERSION: 0.7.4
+      FGA_SHA256: 05e95247c99e5361fcb837dd6c41cfad2c4e9582d2ba90e571088ef20c87a70e
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the fga CLI (pinned, checksum-verified)
+        run: |
+          curl -fsSL -o fga.tgz "https://github.com/openfga/cli/releases/download/v${FGA_VERSION}/fga_${FGA_VERSION}_linux_amd64.tar.gz"
+          echo "${FGA_SHA256}  fga.tgz" | sha256sum -c -
+          tar -xzf fga.tgz fga
+      - name: Validate and test the model
+        run: |
+          ./fga model validate --file authorization/model.fga
+          ./fga model test --tests authorization/model.fga.yaml

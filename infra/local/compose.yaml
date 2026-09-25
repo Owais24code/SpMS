@@ -1,0 +1,48 @@
+# Local development: PostgreSQL 16 with two databases (spms, openfga) and OpenFGA.
+#
+#   docker compose -f infra/local/compose.yaml up -d
+#   PGURL=postgres://postgres:spms@localhost:5432/spms database/tools/verify.sh   # schema + tests
+#   fga store create --name spms-dev --model authorization/model.fga --api-url http://localhost:8080
+#
+# Not a production template: trust-free but plaintext, single node, no backups.
+name: spms
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: spms
+      POSTGRES_DB: spms
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-openfga-db.sql:/docker-entrypoint-initdb.d/10-openfga.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  openfga-migrate:
+    image: openfga/openfga:v1.10.2
+    command: migrate
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: postgres://postgres:spms@postgres:5432/openfga?sslmode=disable
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  openfga:
+    image: openfga/openfga:v1.10.2
+    command: run
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: postgres://postgres:spms@postgres:5432/openfga?sslmode=disable
+      OPENFGA_PLAYGROUND_ENABLED: "false"
+      OPENFGA_LOG_FORMAT: json
+    ports: ["8080:8080"]
+    depends_on:
+      openfga-migrate: {condition: service_completed_successfully}
+
+volumes:
+  pgdata:

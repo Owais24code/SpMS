@@ -1,0 +1,226 @@
+# Run: fga model test --tests authorization/model.fga.yaml
+# Every assertion traces to role_permissions.json or a spec rule named in the comment.
+name: SpMS authorization model
+model_file: ./model.fga
+
+# Shared world: tenant t1 with properties a1, a2; tenant t2 with b1.
+tuples:
+  - {user: tenant:t1, relation: tenant, object: property:a1}
+  - {user: tenant:t1, relation: tenant, object: property:a2}
+  - {user: tenant:t2, relation: tenant, object: property:b1}
+
+  - {user: user:desk, relation: front_desk, object: property:a1}
+  - {user: user:sched, relation: scheduler, object: property:a1}
+  - {user: user:mgr, relation: spa_manager, object: property:a1}
+  - {user: user:prov, relation: provider, object: property:a1}
+  - {user: user:prov2, relation: provider, object: property:a1}
+  - {user: user:fin, relation: finance, object: tenant:t1}            # tenant-wide role
+  - {user: user:hr, relation: hr_compliance, object: tenant:t1}
+  - {user: user:house, relation: housekeeping, object: property:a1}
+  - {user: user:mkt, relation: marketing, object: property:a1}
+  - {user: user:exec, relation: executive, object: tenant:t1}
+  - {user: user:secadm, relation: security_admin, object: tenant:t1}
+  - {user: user:admin, relation: platform_admin, object: tenant:t1}
+  - {user: user:approver, relation: configuration_approver, object: tenant:t1}
+  - {user: user:b_desk, relation: front_desk, object: property:b1}
+
+  - {user: property:a1, relation: property, object: device:tab1}
+  - {user: device:tab1, relation: registered_device, object: property:a1}
+
+  - {user: tenant:t1, relation: tenant, object: guest:g1}
+  - {user: user:g1, relation: owner, object: guest:g1}
+  - user: user:assistant
+    relation: delegate_book
+    object: guest:g1
+    condition:
+      name: active_delegation
+      context: {grant_expires_at: "2026-12-31T00:00:00Z", allowed_property_ids: ["a1"]}
+
+  # Appointment ap1 at a1 for g1 with prov. In the API these three arrive as contextual tuples.
+  - {user: property:a1, relation: property, object: appointment:ap1}
+  - {user: guest:g1, relation: guest, object: appointment:ap1}
+  - {user: user:prov, relation: assigned_provider, object: appointment:ap1}
+
+  - {user: guest:g1, relation: guest, object: intake_submission:in1}
+  - {user: appointment:ap1, relation: appointment, object: intake_submission:in1}
+
+  - {user: appointment:ap1, relation: appointment, object: treatment_note:n1}
+  - {user: user:prov, relation: author, object: treatment_note:n1}
+  - user: user:mgr
+    relation: oversight
+    object: treatment_note:n1
+    condition:
+      name: active_grant
+      context: {grant_expires_at: "2026-10-01T00:00:00Z"}
+
+  - {user: tenant:t1, relation: tenant, object: staff_record:prov}
+  - {user: user:prov, relation: subject, object: staff_record:prov}
+
+tests:
+  - name: board and booking by role
+    check:
+      - user: user:desk
+        object: property:a1
+        assertions: {can_view_board: true, can_book: true, can_check_in: true, can_take_payment: true,
+                     can_preflight: false, can_override_soft_conflict: false, can_refund: false}
+      - user: user:sched
+        object: property:a1
+        assertions: {can_view_board: true, can_preflight: true, can_reassign: true, can_book: false}
+      - user: user:mgr
+        object: property:a1
+        assertions: {can_override_soft_conflict: true, can_approve_comp: true, can_read_operational_reports: true,
+                     can_read_financial_reports: false}
+      - user: user:prov
+        object: property:a1
+        assertions: {can_view_board: false, can_book: false, staff: true}
+
+  - name: roles never cross properties or tenants
+    check:
+      - user: user:desk
+        object: property:a2
+        assertions: {can_view_board: false, can_book: false}
+      - user: user:b_desk
+        object: property:a1
+        assertions: {can_view_board: false}
+      - user: user:fin                      # tenant-wide finance reaches every t1 property...
+        object: property:a2
+        assertions: {can_refund: true, can_reconcile: true, can_read_financial_reports: true}
+      - user: user:fin                      # ...and none of t2's
+        object: property:b1
+        assertions: {can_refund: false}
+
+  - name: provider sees assigned appointments only (provider appointments read:assigned)
+    check:
+      - user: user:prov
+        object: appointment:ap1
+        assertions: {can_read: true, can_transition: true, can_read_intake_summary: true,
+                     can_write_treatment_note: true, can_reassign: false, can_override_soft_conflict: false}
+      - user: user:prov2
+        object: appointment:ap1
+        assertions: {can_read: false, can_transition: false, can_read_intake_summary: false}
+      - user: user:desk
+        object: appointment:ap1
+        assertions: {can_read: true, can_cancel: true, can_read_intake_status: true, can_read_intake_summary: false}
+
+  - name: intake is minimum-necessary (SEC-008, DEC-004)
+    check:
+      - user: user:g1
+        object: intake_submission:in1
+        assertions: {can_read_full: true, can_update: true}
+      - user: user:prov
+        object: intake_submission:in1
+        assertions: {can_read_full: false, can_read_summary: true, can_acknowledge: true}
+      - user: user:desk                     # completion status only
+        object: intake_submission:in1
+        assertions: {can_read_status: true, can_read_summary: false, can_read_full: false}
+      - user: user:mgr
+        object: intake_submission:in1
+        assertions: {can_read_summary: false, can_read_full: false}
+      - user: user:hr
+        object: intake_submission:in1
+        assertions: {can_read_full: false}
+      - user: user:mkt
+        object: intake_submission:in1
+        assertions: {can_read_status: false, can_read_summary: false}
+
+  - name: delegation is explicit, expiring and property-scoped (IDN-003)
+    check:
+      - user: user:assistant
+        object: appointment:ap1
+        context: {current_time: "2026-09-25T10:00:00Z", property_id: "a1"}
+        assertions: {can_read: true, can_cancel: false}
+      - user: user:assistant
+        object: guest:g1
+        context: {current_time: "2026-09-25T10:00:00Z", property_id: "a1"}
+        assertions: {can_book: true, can_view_itinerary: true, can_pay: false, can_complete_intake: false}
+      - user: user:assistant               # a property the delegation does not name
+        object: guest:g1
+        context: {current_time: "2026-09-25T10:00:00Z", property_id: "a2"}
+        assertions: {can_book: false}
+      - user: user:assistant               # after expiry
+        object: guest:g1
+        context: {current_time: "2027-01-01T00:00:00Z", property_id: "a1"}
+        assertions: {can_book: false}
+      - user: user:assistant               # a delegate never reaches intake content by relationship alone
+        object: intake_submission:in1
+        context: {current_time: "2026-09-25T10:00:00Z", property_id: "a1"}
+        assertions: {can_read_full: false, can_read_summary: false}
+
+  - name: treatment notes (read:authored_or_assigned, amend:authored, time-bound oversight)
+    check:
+      - user: user:prov
+        object: treatment_note:n1
+        assertions: {can_read: true, can_amend: true}
+      - user: user:prov2
+        object: treatment_note:n1
+        context: {current_time: "2026-09-25T10:00:00Z"}
+        assertions: {can_read: false}
+      - user: user:mgr
+        object: treatment_note:n1
+        context: {current_time: "2026-09-25T10:00:00Z"}
+        assertions: {can_read: true, can_amend: false}
+      - user: user:mgr                      # oversight grant has expired
+        object: treatment_note:n1
+        context: {current_time: "2026-10-02T00:00:00Z"}
+        assertions: {can_read: false}
+      - user: user:desk
+        object: treatment_note:n1
+        context: {current_time: "2026-09-25T10:00:00Z"}
+        assertions: {can_read: false}
+
+  - name: HR records are excluded from broad roles (SEC-007)
+    check:
+      - user: user:prov
+        object: staff_record:prov
+        assertions: {can_read_hr_profile: true, can_upload_documents: true, can_read_credential_number: false,
+                     can_verify_credentials: false}
+      - user: user:hr
+        object: staff_record:prov
+        assertions: {can_read_credential_number: true, can_adjudicate_screening: true}
+      - user: user:mgr
+        object: staff_record:prov
+        assertions: {can_read_hr_profile: false, can_read_credential_number: false}
+      - user: user:admin
+        object: staff_record:prov
+        assertions: {can_read_hr_profile: false}
+      - user: user:mgr                      # a manager sees validity, on the property, not the record
+        object: property:a1
+        assertions: {can_read_staff_validity: true, can_suspend_assignment: true}
+
+  - name: segregation of duties on configuration (SEC-014)
+    check:
+      - user: user:admin
+        object: tenant:t1
+        assertions: {can_propose_configuration: true, can_approve_configuration: false}
+      - user: user:approver
+        object: tenant:t1
+        assertions: {can_approve_configuration: true, can_propose_configuration: false}
+      - user: user:secadm
+        object: tenant:t1
+        assertions: {can_read_security_audit: true, can_revoke_session: true, can_propose_role: true}
+
+  - name: executives see aggregates only
+    check:
+      - user: user:exec
+        object: property:a1
+        assertions: {can_read_scorecard: true, can_view_board: false, can_read_operational_reports: false}
+
+  - name: registered devices
+    check:
+      - user: device:tab1
+        object: property:a1
+        assertions: {registered_device: true}
+      - user: device:tab1
+        object: property:a2
+        assertions: {registered_device: false}
+
+  - name: list objects - what a provider may open
+    list_objects:
+      - user: user:prov
+        type: appointment
+        assertions:
+          can_read: ["appointment:ap1"]
+      - user: user:prov2
+        type: appointment
+        assertions:
+          can_read: []

@@ -1,0 +1,210 @@
+model
+  schema 1.1
+
+# SpMS authorization model (OpenFGA).
+#
+# Source of the permissions: 02_COMPLETE_TECHNICAL_PACKAGE/technical/config/role_permissions.json
+# (defaultEffect: deny). Anything not expressed here is refused.
+#
+# Three layers, each answering a different question:
+#   1. Entra ID / magic link   who is calling                        (authentication)
+#   2. spa.* scopes in token   may this client call this API family  (coarse gate)
+#   3. this model              may this principal act on this object (relationships)
+#   and underneath, PostgreSQL RLS confines every query to the tenant/property in scope.
+#
+# Identities are core.principal ids: user:<principal_id>. A service account or the outbox
+# worker is also a user. Devices (provider tablet, kiosk) are their own type.
+#
+# What is stored vs. what is passed:
+#   stored tuples      slow-changing facts owned by SpMS tables and synced through the outbox:
+#                      tenant/property roles (workforce.staff_role_assignment), guest self
+#                      (guest.guest.principal_id), delegations (guest.delegated_authority),
+#                      device registration (core.device_registration)
+#   contextual tuples  facts of the row already loaded for the request: appointment -> property,
+#                      guest, assigned provider; note -> author. No tuple write on every reassign.
+#
+# Not in this model, by design: monetary limits, dual approval, "before lock" and other state
+# rules (domain services); field masking (serialisers, driven by the relations below).
+
+type user
+
+type device
+  relations
+    define property: [property]
+
+type tenant
+  relations
+    # Tenant-wide role assignments (staff_role_assignment.property_id IS NULL).
+    define provider: [user]
+    define front_desk: [user]
+    define scheduler: [user]
+    define spa_manager: [user]
+    define housekeeping: [user]
+    define inventory_manager: [user]
+    define marketing: [user]
+    define support: [user]
+    define operations_analyst: [user]
+    define executive: [user]
+    define finance: [user]
+    define hr_compliance: [user]
+    define platform_admin: [user]
+    define configuration_approver: [user]
+    define release_manager: [user]
+    define security_admin: [user]
+    define integration_service: [user]
+
+    define can_read_security_audit: security_admin
+    define can_revoke_session: security_admin
+    define can_propose_role: security_admin or platform_admin
+    define can_propose_configuration: platform_admin
+    define can_approve_configuration: configuration_approver
+    define can_manage_staff: hr_compliance
+
+type property
+  relations
+    define tenant: [tenant]
+    define registered_device: [device]
+
+    # Roles: assigned at this property, or tenant-wide.
+    define provider: [user] or provider from tenant
+    define front_desk: [user] or front_desk from tenant
+    define scheduler: [user] or scheduler from tenant
+    define spa_manager: [user] or spa_manager from tenant
+    define housekeeping: [user] or housekeeping from tenant
+    define inventory_manager: [user] or inventory_manager from tenant
+    define marketing: [user] or marketing from tenant
+    define support: [user] or support from tenant
+    define operations_analyst: [user] or operations_analyst from tenant
+    define executive: [user] or executive from tenant
+    define finance: [user] or finance from tenant
+    define integration_service: [user] or integration_service from tenant
+
+    define staff: provider or front_desk or scheduler or spa_manager or housekeeping or inventory_manager
+
+    # appointments
+    define can_view_board: front_desk or scheduler or spa_manager
+    define can_book: front_desk or spa_manager
+    define can_preflight: scheduler or spa_manager
+    define can_reassign: scheduler or spa_manager
+    define can_bulk_move: scheduler or spa_manager
+    define can_override_soft_conflict: spa_manager
+    define can_check_in: front_desk or spa_manager
+    define can_read_intake_status: front_desk or scheduler or spa_manager
+
+    # guests (the guest row's tenancy is RLS's job; the right is held at the property)
+    define can_read_guest_profile: front_desk or spa_manager
+    define can_write_guest_profile: front_desk
+    define can_read_marketing_fields: marketing
+    define can_read_deidentified_guests: operations_analyst
+
+    # commerce
+    define can_take_payment: front_desk
+    define can_read_payment_status: front_desk or finance
+    define can_refund: finance
+    define can_reconcile: finance
+    define can_approve_comp: spa_manager
+
+    # operations
+    define can_operate_devices_lockers: front_desk
+    define can_update_room_readiness: housekeeping
+    define can_read_inventory: inventory_manager or housekeeping
+    define can_adjust_inventory: inventory_manager
+    define can_move_stock_state: inventory_manager or housekeeping
+    define can_schedule_messages: marketing
+    define can_replay_integration: support
+    define can_integrate: integration_service
+
+    # staff
+    define can_read_staff_validity: spa_manager
+    define can_suspend_assignment: spa_manager
+
+    # reports
+    define can_read_operational_reports: spa_manager or operations_analyst
+    define can_export_operational_reports: spa_manager
+    define can_read_financial_reports: finance
+    define can_read_inventory_reports: inventory_manager
+    define can_read_scorecard: executive
+
+type guest
+  relations
+    define tenant: [tenant]
+    define owner: [user]
+    # IDN-003: a delegate holds only the actions written on the delegation, until it expires,
+    # at the properties it names. There is no delegate relation that reaches intake content.
+    define delegate_book: [user with active_delegation]
+    define delegate_cancel: [user with active_delegation]
+    define delegate_reschedule: [user with active_delegation]
+    define delegate_pay: [user with active_delegation]
+    define delegate_intake: [user with active_delegation]
+    define delegate_view: [user with active_delegation] or delegate_book or delegate_cancel or delegate_reschedule or delegate_pay
+
+    define can_view_itinerary: owner or delegate_view
+    define can_book: owner or delegate_book
+    define can_cancel: owner or delegate_cancel
+    define can_reschedule: owner or delegate_reschedule
+    define can_pay: owner or delegate_pay
+    define can_complete_intake: owner or delegate_intake
+
+type appointment
+  relations
+    # contextual
+    define property: [property]
+    define guest: [guest]
+    define assigned_provider: [user]
+
+    define can_read: assigned_provider or can_view_board from property or can_view_itinerary from guest
+    define can_transition: assigned_provider or can_check_in from property
+    define can_reschedule: can_book from property or can_reassign from property or can_reschedule from guest
+    define can_cancel: can_book from property or can_cancel from guest
+    define can_reassign: can_reassign from property
+    define can_override_soft_conflict: can_override_soft_conflict from property
+    define can_read_intake_status: can_read_intake_status from property
+    define can_read_intake_summary: assigned_provider
+    define can_write_treatment_note: assigned_provider
+    define can_record_product_use: assigned_provider
+    define can_order: assigned_provider or can_take_payment from property
+
+type intake_submission
+  relations
+    # contextual
+    define guest: [guest]
+    define appointment: [appointment]
+
+    # intake.responses: guest:own; provider:assigned:minimum_necessary
+    define can_read_full: owner from guest or delegate_intake from guest
+    define can_read_summary: can_read_full or can_read_intake_summary from appointment
+    define can_update: owner from guest or delegate_intake from guest
+    define can_acknowledge: can_read_intake_summary from appointment
+    define can_read_status: can_read_full or can_read_intake_status from appointment
+
+type treatment_note
+  relations
+    # contextual
+    define appointment: [appointment]
+    define author: [user]
+    # spa_manager exception oversight: an explicit, expiring grant per note, never a role default.
+    define oversight: [user with active_grant]
+
+    define can_read: author or can_write_treatment_note from appointment or oversight
+    define can_amend: author
+
+type staff_record
+  relations
+    define tenant: [tenant]
+    define subject: [user]
+
+    define can_read_hr_profile: subject or hr_compliance from tenant
+    define can_update_hr_profile: hr_compliance from tenant
+    define can_read_credential_number: hr_compliance from tenant
+    define can_read_documents: subject or hr_compliance from tenant
+    define can_upload_documents: subject or hr_compliance from tenant
+    define can_verify_credentials: hr_compliance from tenant
+    define can_adjudicate_screening: hr_compliance from tenant
+
+condition active_grant(current_time: timestamp, grant_expires_at: timestamp) {
+  current_time < grant_expires_at
+}
+
+condition active_delegation(current_time: timestamp, grant_expires_at: timestamp, property_id: string, allowed_property_ids: list<string>) {
+  current_time < grant_expires_at && (size(allowed_property_ids) == 0 || property_id in allowed_property_ids)
+}
