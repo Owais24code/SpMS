@@ -8,16 +8,16 @@
 #
 # Three jobs, deliberately separate so a failure names itself:
 #
-#   api   the solution built warnings-as-errors, then 150 xunit tests against a
+#   backendthe solution built warnings-as-errors, then 150 xunit tests against a
 #         real postgres:16 — the migrations, the GiST exclusion constraint and
 #         the unit of work cannot be exercised by anything else — then the HTTP
 #         acceptance sweep against a freshly started instance.
-#   web   the Angular production build and the contrast audit.
+#   frontendthe Angular production build and the contrast audit.
 #   bicep the deployment template compiled, so a broken template is caught here
 #         rather than half way through a deploy.
 #
-# Everything the API job needs is vendored: api/vendor/nuget holds the package
-# closure and api/NuGet.config clears the public feeds, so the restore is
+# Everything the API job needs is vendored: backend/vendor/nuget holds the package
+# closure and backend/NuGet.config clears the public feeds, so the restore is
 # hermetic and a runner with no NuGet access still builds.
 # -----------------------------------------------------------------------------
 
@@ -77,17 +77,17 @@ jobs:
       # points at the vendored feed. --no-restore on the build below then proves
       # the restore actually resolved everything rather than deferring it.
       - name: Restore
-        working-directory: api
+        working-directory: backend
         run: dotnet restore Spms.sln
 
       # Directory.Build.props sets TreatWarningsAsErrors, so this step is also
       # the lint.
       - name: Build
-        working-directory: api
+        working-directory: backend
         run: dotnet build Spms.sln -c Release --no-restore
 
       - name: Test
-        working-directory: api
+        working-directory: backend
         run: dotnet test Spms.sln -c Release --no-build --nologo --logger 'trx;LogFileName=results.trx'
 
       # The unit suite proves the rules; it says nothing about status codes,
@@ -97,7 +97,7 @@ jobs:
       # seeded board, so a second run would assert against the first run's
       # leftovers.
       - name: Start the API
-        working-directory: api
+        working-directory: backend
         env:
           ASPNETCORE_ENVIRONMENT: Development
           ASPNETCORE_URLS: http://127.0.0.1:5199
@@ -120,7 +120,7 @@ jobs:
           exit 1
 
       - name: HTTP acceptance sweep
-        working-directory: api
+        working-directory: backend
         run: node tools/http-acceptance.mjs http://127.0.0.1:5199
 
       # Unconditionally, and before the job ends: a failed sweep is exactly when
@@ -138,7 +138,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: api-test-results
-          path: api/tests/**/TestResults/*.trx
+          path: backend/tests/**/TestResults/*.trx
           if-no-files-found: warn
 
   web:
@@ -147,27 +147,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pinned to the version in web/package.json's engines field. Angular 22
+      # Pinned to the version in frontend/package.json's engines field. Angular 22
       # refuses to run below 22.22.3 and the error it gives ("Node.js version
       # detected") does not say which file set the floor.
       - uses: actions/setup-node@v4
         with:
           node-version: '22.23.2'
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
-        working-directory: web
+        working-directory: frontend
         run: npm ci
 
       - name: Build
-        working-directory: web
+        working-directory: frontend
         run: npx ng build --configuration production
 
       # The accessibility requirement is a measured contrast ratio, not a
       # promise in a document. This is the measurement.
       - name: Contrast audit
-        working-directory: web
+        working-directory: frontend
         run: npm run audit:contrast
 
   bicep:

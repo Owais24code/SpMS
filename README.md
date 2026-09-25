@@ -7,14 +7,14 @@ Built against the **UX Field Specification v1.1** (UX-001 … UX-012) and the
 
 ```
 SpMS/
-  web/     Angular 22 — public site, workspace and the shared token layer
-  api/     .NET 10 — domain foundation (permissions, codes, concurrency)
+  frontend/Angular 22 — public site, workspace and the shared token layer
+  backend/  .NET 8 — ASP.NET Core API, domain, PostgreSQL adapter
 ```
 
 ### Front-end structure
 
 ```
-web/src/app/
+frontend/src/app/
   core/          services, view models, placeholder data — no UI
     services/    theme
     models/      navigation, spa view models
@@ -44,7 +44,7 @@ workspace primitives (`.panel`, `.table`, `.toolbar`, `.badge`, `.meter`,
 ## Getting started
 
 ```bash
-cd web
+cd frontend
 npm install
 npm start            # http://localhost:4200
 npm run build        # production bundle
@@ -56,7 +56,7 @@ npm run audit:contrast   # WCAG 2.2 AA token audit — exits non-zero on failure
 
 ## Design token layer
 
-`web/src/styles/` is the shared foundation. Everything else consumes it.
+`frontend/src/styles/` is the shared foundation. Everything else consumes it.
 
 | File | Contains |
 |---|---|
@@ -118,7 +118,7 @@ field in error.
 
 ## API foundation
 
-`api/src/Spms.Domain` holds the parts that cannot be retrofitted later:
+`backend/src/Spms.Domain` holds the parts that cannot be retrofitted later:
 
 - **`Permissions/SpmsScopes.cs`** — the full scope catalogue extracted from the
   UX spec. `Restricted` marks the scopes that additionally require relationship

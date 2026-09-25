@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Rebuilds api/vendor/nuget: the offline package feed NuGet.offline.config reads.
+Rebuilds backend/vendor/nuget: the offline package feed NuGet.offline.config reads.
 
 Why this is a script and not a list. A NuGet feed with a missing transitive
 dependency does not warn; the restore fails with NU1101 naming only the FIRST
@@ -14,7 +14,7 @@ It needs a machine that already has the packages in its NuGet cache — run a
 normal `dotnet restore` first, then this. It copies, never downloads, so it
 works on a machine whose route to nuget.org has since been closed.
 
-    python3 tools/vendor-nuget.py                 # from api/
+    python3 tools/vendor-nuget.py                 # from backend/
     python3 tools/vendor-nuget.py --cache ~/.nuget/packages --out vendor/nuget
 
 Version selection: a dependency range like [8.0.0, ) is satisfied by whatever

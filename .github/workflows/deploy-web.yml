@@ -10,7 +10,7 @@
 # Authentication is OIDC. There is no publish profile and no storage key in a
 # secret: the job requests a short-lived token from GitHub's OIDC provider and
 # exchanges it for an Azure one, so there is no long-lived credential in this
-# repository to leak or rotate. docs/DEPLOYMENT.md has the one-time setup.
+# repository to leak or rotate. README.md (Deployment) has the one-time setup.
 # -----------------------------------------------------------------------------
 
 name: Deploy web
@@ -19,7 +19,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'web/**'
+      - 'frontend/**'
       - 'infra/**'
       - '.github/workflows/deploy-web.yml'
   workflow_dispatch:
@@ -57,17 +57,17 @@ jobs:
         with:
           node-version: '22.23.2'
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       # ci, not install: the lockfile is the contract, and a deploy that
       # silently resolved a different minor version is a deploy nobody can
       # reproduce.
       - name: Install dependencies
-        working-directory: web
+        working-directory: frontend
         run: npm ci
 
       - name: Build
-        working-directory: web
+        working-directory: frontend
         run: npx ng build --configuration production
 
       # The bundle is environment-agnostic; this file is the environment. It is
@@ -80,7 +80,7 @@ jobs:
       # a board that silently fails every request.
       - name: Write runtime configuration
         run: |
-          cat > web/dist/web/browser/assets/config.js <<'CONFIG'
+          cat > frontend/dist/web/browser/assets/config.js <<'CONFIG'
           /* Written by .github/workflows/deploy-web.yml. Overwrite this file in
            * $web and purge Front Door to repoint the site — no rebuild needed.
            *
@@ -90,7 +90,7 @@ jobs:
             useRealApi: false,
           };
           CONFIG
-          cat web/dist/web/browser/assets/config.js
+          cat frontend/dist/web/browser/assets/config.js
 
       - name: Sign in to Azure
         uses: azure/login@v2
@@ -141,7 +141,7 @@ jobs:
             --account-name '${{ steps.infra.outputs.storageAccountName }}' \
             --auth-mode login \
             --destination '$web' \
-            --source web/dist/web/browser \
+            --source frontend/dist/web/browser \
             --overwrite \
             --content-cache 'public, max-age=31536000, immutable' \
             --exclude-pattern 'index.html'
@@ -157,7 +157,7 @@ jobs:
               --auth-mode login \
               --container-name '$web' \
               --name "$f" \
-              --file "web/dist/web/browser/$f" \
+              --file "frontend/dist/web/browser/$f" \
               --overwrite \
               --content-cache 'no-cache, no-store, must-revalidate'
           done
