@@ -21,7 +21,7 @@ public sealed class OpenFgaOptions
     public string? ModelId { get; set; }
     /// <summary>The preshared key (Key Vault in deployed environments).</summary>
     public string? ApiToken { get; set; }
-    /// <summary>Development: create the store and write authorization/model.json when StoreId is empty.</summary>
+    /// <summary>Create the store if missing and write authorization/model.json when StoreId is empty: Development start-up, and the pipeline's `--fga-sync`. Off, an instance attaches to the store by name.</summary>
     public bool Bootstrap { get; set; }
     public string StoreName { get; set; } = "spms";
 }
@@ -43,7 +43,29 @@ public sealed class FgaClientHolder
     public async Task BootstrapIfNeededAsync(WebApplication app)
     {
         if (!Ready && _options.Bootstrap) await BootstrapAsync(app.Logger);
-        if (!Ready) throw new InvalidOperationException("Authorization:OpenFga:StoreId is not set and Bootstrap is off.");
+        if (!Ready) await AttachAsync(app.Logger);
+    }
+
+    /// <summary>
+    /// Deployed environments: no store id in configuration. Find the store by
+    /// name and pin its latest model, once, at start-up. The pipeline's
+    /// `--fga-sync` step (Bootstrap on) is what creates the store and writes a
+    /// model; an instance only ever attaches, so a model changes when a release
+    /// says so, never because an instance restarted.
+    /// </summary>
+    public async Task AttachAsync(ILogger logger, CancellationToken ct = default)
+    {
+        var admin = new OpenFgaClient(Configure(new ClientConfiguration { ApiUrl = _options.ApiUrl! }));
+        var stores = await admin.ListStores(new ClientListStoresRequest(), null, ct);
+        var store = stores.Stores?.FirstOrDefault(s => s.Name == _options.StoreName)?.Id
+                    ?? throw new InvalidOperationException(
+                        $"OpenFGA has no store named '{_options.StoreName}'. Run `Spms.Host --fga-sync` with Authorization:OpenFga:Bootstrap=true first.");
+        var model = string.IsNullOrWhiteSpace(_options.ModelId)
+            ? (await Create(store, null).ReadLatestAuthorizationModel(null, ct))?.AuthorizationModel?.Id
+              ?? throw new InvalidOperationException($"OpenFGA store '{_options.StoreName}' has no authorization model. Run `Spms.Host --fga-sync` first.")
+            : _options.ModelId;
+        _client = Create(store, model);
+        logger.LogInformation("OpenFGA attached: store {Store}, model {Model}", store, model);
     }
     public string? ModelId { get; private set; }
 
@@ -52,15 +74,20 @@ public sealed class FgaClientHolder
     private OpenFgaClient Create(string store, string? model)
     {
         ModelId = model;
-        var cfg = new ClientConfiguration
+        return new OpenFgaClient(Configure(new ClientConfiguration
         {
             ApiUrl = _options.ApiUrl!,
             StoreId = store,
             AuthorizationModelId = string.IsNullOrWhiteSpace(model) ? null : model,
-        };
+        }));
+    }
+
+    /// <summary>The preshared key on every client, the store-less admin one included (a deployed OpenFGA refuses anything without it).</summary>
+    private ClientConfiguration Configure(ClientConfiguration cfg)
+    {
         if (!string.IsNullOrWhiteSpace(_options.ApiToken))
             cfg.Credentials = new Credentials { Method = CredentialsMethod.ApiToken, Config = new CredentialsConfig { ApiToken = _options.ApiToken } };
-        return new OpenFgaClient(cfg);
+        return cfg;
     }
 
     /// <summary>
@@ -69,7 +96,7 @@ public sealed class FgaClientHolder
     /// </summary>
     public async Task BootstrapAsync(ILogger logger, CancellationToken ct = default)
     {
-        var admin = new OpenFgaClient(new ClientConfiguration { ApiUrl = _options.ApiUrl! });
+        var admin = new OpenFgaClient(Configure(new ClientConfiguration { ApiUrl = _options.ApiUrl! }));
         var stores = await admin.ListStores(new ClientListStoresRequest(), null, ct);
         var store = stores.Stores?.FirstOrDefault(s => s.Name == _options.StoreName)?.Id
                     ?? (await admin.CreateStore(new ClientCreateStoreRequest { Name = _options.StoreName }, null, ct)).Id;

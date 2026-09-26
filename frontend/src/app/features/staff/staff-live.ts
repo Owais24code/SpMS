@@ -74,6 +74,17 @@ type Tab = 'profile' | 'hr' | 'roles' | 'qualifications' | 'credentials';
                 </label>
                 <label class="inline"><input type="checkbox" [(ngModel)]="edit.bookable" name="bk" /> Bookable on the board</label>
                 <button type="button" class="btn btn--primary" (click)="saveProfile(s)">Save profile</button>
+                @if (!s.hasSignIn) {
+                  <fieldset class="stack" data-testid="sign-in-link">
+                    <legend>Sign-in</legend>
+                    <p class="subtle">Link {{ s.preferredName }} to their Microsoft Entra account. Their object id is on the user's page in Entra ID (Users → the person → Object ID).</p>
+                    <div class="form-grid">
+                      <label>Entra object id <input id="signin-oid" [(ngModel)]="signIn.objectId" name="oid" placeholder="00000000-0000-0000-0000-000000000000" /></label>
+                      <label>Work email <input id="signin-email" [(ngModel)]="signIn.email" name="em" type="email" /></label>
+                    </div>
+                    <button type="button" class="btn btn--secondary" [disabled]="!signIn.objectId.trim()" (click)="giveSignIn(s)">Give sign-in</button>
+                  </fieldset>
+                }
               }
               @case ('hr') {
                 @if (hrDenied()) {
@@ -246,6 +257,7 @@ export class StaffLive implements OnInit {
   protected grantService = '';
   protected cred = { credentialKind: 'License', licenseTypeCode: '', number: '', expiresAt: '' };
   protected shift = { staffId: '', entryType: 'Shift', starts: '', ends: '' };
+  protected signIn = { objectId: '', email: '' };
 
   ngOnInit(): void { void this.load(); }
 
@@ -324,6 +336,17 @@ export class StaffLive implements OnInit {
       this.toast.success('Profile saved', saved.preferredName);
       await this.load();
       this.select(this.team().find((x) => x.staffId === s.staffId) ?? saved);
+    });
+  }
+
+  protected async giveSignIn(s: StaffDto): Promise<void> {
+    await this.run(async () => {
+      await this.api.linkSignIn(s.staffId, s.rowVersion, { objectId: this.signIn.objectId.trim(), email: this.signIn.email.trim() || undefined });
+      this.toast.success('Sign-in linked', `${s.preferredName} can now sign in. Propose their roles next.`);
+      this.signIn = { objectId: '', email: '' };
+      await this.load();
+      const fresh = this.team().find((x) => x.staffId === s.staffId);
+      if (fresh) this.select(fresh);
     });
   }
 

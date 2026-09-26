@@ -14,7 +14,7 @@ SpMS/
   backend/         .NET 8 / ASP.NET Core: modular monolith (see Architecture)
   database/        R1 PostgreSQL 16 schema: model, generator, generated SQL, SQL tests
   authorization/   OpenFGA model, model tests, live-server smoke test
-  infra/           main.bicep (front end), openfga.bicep (Container Apps), local/compose.yaml
+  infra/           api.bicep + openfga.bicep (scripted alternative to docs/deploy-azure-portal.md), local/compose.yaml
   .github/         CI (backend, frontend, database, authorization, bicep) and web deploy
 ```
 
@@ -308,59 +308,45 @@ Glass effects are used on marketing surfaces only.
 
 ---
 
-## Deployment (front end)
+## Deployment
 
-The Angular build is served from Azure Blob static website hosting behind **Front Door
-Standard**. Front Door rewrites extensionless paths to `/index.html` so deep links answer
-200 rather than 404, and the deploy workflow asserts this. The deployed build runs in demo
-mode.
+**[docs/deploy-azure-portal.md](docs/deploy-azure-portal.md)** is the runbook. It uses the Azure
+portal, Visual Studio publish and VS Code only, with no CLI and no pipeline.
 
-To repoint it at a real API, overwrite `assets/config.js` in `$web` and purge Front Door.
-No rebuild is needed.
+| Piece | Hosting |
+|---|---|
+| Front end | Azure App Service (Windows). `public/web.config` gives SPA deep links and no-cache entry points; `frontend/deploy/build-for-azure.ps1` builds it with `deploy/config.production.js` |
+| API | Azure App Service (Windows, .NET 8), a single instance, because the live board fans out in-process |
+| Migrate, maintain, FGA sync | App Service WebJobs published with the API (`App_Data/jobs/triggered`) |
+| Database | PostgreSQL flexible server 16, with databases `spms` and `openfga` |
+| OpenFGA | Container Apps (`openfga/openfga`), with a preshared key and an IP allow-list |
 
-One-time setup:
-
-1. `az group create -n rg-spms-dev -l westeurope`
-2. Create an app registration with a federated credential for
-   `repo:OWNER/REPO:environment:dev`. Assign Contributor on the resource group; the template
-   grants *Storage Blob Data Contributor* to `deployerPrincipalId`.
-3. Add repository secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`,
-   variables `AZURE_RESOURCE_GROUP` and `AZURE_DEPLOYER_OBJECT_ID`, and a GitHub environment
-   `dev`.
-
-After that, every push under `frontend/` or `infra/` deploys. Purge Front Door after a
-manual upload, because edges hold `index.html`:
-`az afd endpoint purge -g $RG --profile-name $PROFILE --endpoint-name $ENDPOINT --content-paths '/' '/index.html' '/assets/config.js'`.
-
-Front Door Standard has a monthly base charge. Azure Static Web Apps is the free
-alternative, but it is a different resource.
-
-## Deployment (API and database)
-
-`infra/api.bicep` provisions the API on Azure Container Apps, PostgreSQL Flexible Server 16,
-Key Vault and Log Analytics / Application Insights. `infra/openfga.bicep` joins the same
-environment, because OpenFGA's ingress is internal. The image is `backend/Dockerfile`, built
-from the repository root. One image runs three entry points:
+**One image, four entry points:**
 
 - **The API**, with probes on `/health/live` and `/health/ready`.
-- **`--migrate`**, a manual Container Apps job the pipeline starts before rolling a revision.
-  It uses the admin connection to create the roles and two login roles (`spms_owner_login`,
-  which may SET ROLE `spms_owner`, and `spms_app_login`, which may SET ROLE `spms_app` and
-  `spms_outbox`), then migrates as the owner.
-- **`--maintain`**, a nightly scheduled job run as the owner. It keeps monthly partitions
-  three months ahead and drops outbox months that are wholly published and past retention.
+- **`--migrate`** runs, in order:
+  1. With the admin connection: creates the group roles and the two login roles.
+     `spms_owner_login` may SET ROLE `spms_owner`; `spms_app_login` may SET ROLE `spms_app` and
+     `spms_outbox`.
+  2. Migrates as the owner.
+  3. When a `Provision` section is configured, creates the first tenant, its properties and
+     its administrators. This is idempotent, and ids are derived from natural keys.
+- **`--maintain`**, the nightly job run as the owner. It keeps monthly partitions three months
+  ahead and drops outbox months that are wholly published and past retention.
+- **`--fga-sync`**, with `Authorization:OpenFga:Bootstrap=true`, creates the OpenFGA store if it
+  is missing, writes `authorization/model.json` and rewrites every tuple from the tables.
 
-Every secret is a Key Vault secret, read through a user-assigned identity. PostgreSQL is
-public-endpoint with TLS required for R1; private networking is the R2 hardening step. The
-API stays at one replica until the live board's fan-out moves to a shared bus.
+**Attaching to OpenFGA.** A deployed instance never writes a model. It attaches to the store by
+name (`Authorization:OpenFga:StoreName`, default `spms`) and pins the latest model once, at
+start-up. A model therefore changes only when a release runs `--fga-sync`.
 
-```
-az deployment group create -g rg-spms-dev -f infra/api.bicep -p apiImage=... pgAdminPassword=... \
-   pgOwnerPassword=... pgAppPassword=... protectionKey=... lookupKey=... guestSigningKey=... metricsKey=... \
-   entraAuthority=https://login.microsoftonline.com/<tenant>/v2.0 entraAudience=api://spms webOrigin=https://<host>
-az deployment group create -g rg-spms-dev -f infra/openfga.bicep -p keyVaultName=<out> managedEnvironmentName=<out>
-az containerapp job start -g rg-spms-dev -n spms-dev-migrate
-```
+**Staff sign-in.** A staff member signs in once linked to their Entra account:
+`POST /staff/{id}/sign-in` with `{ objectId, email }`, or **Staff → Profile → Give sign-in**.
+Linking needs `can_propose_role`, and the link is audited. After that, their roles can be
+approved. Provisioning links the first administrators.
+
+`infra/api.bicep` and `infra/openfga.bicep` are the scripted alternative: Container Apps for
+the API, and Key Vault for the secrets. They compile in CI but are not what the runbook uses.
 
 ---
 

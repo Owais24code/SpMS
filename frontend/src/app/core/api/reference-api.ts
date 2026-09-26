@@ -48,6 +48,10 @@ export class ReferenceApi {
   staff(): Promise<readonly StaffDto[]> { return this.get('/staff'); }
   createStaff(body: { preferredName: string; bookable?: boolean }): Promise<StaffDto> { return this.send('POST', '/staff', body); }
   updateStaff(id: string, v: number, body: Record<string, unknown>): Promise<StaffDto> { return this.send('PATCH', `/staff/${id}`, body, { rowVersion: v }); }
+  /** Links the person to their Entra account (a security administrator's act). */
+  linkSignIn(id: string, v: number, body: { objectId: string; email?: string }): Promise<unknown> {
+    return this.send('POST', `/staff/${id}/sign-in`, body, { rowVersion: v });
+  }
   hr(id: string): Promise<HrDto> { return this.get(`/staff/${id}/hr`); }
   saveHr(id: string, body: Record<string, unknown>, v?: number): Promise<HrDto> {
     return this.send('PUT', `/staff/${id}/hr`, body, v === undefined ? {} : { rowVersion: v });

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { staff } from './support';
 
 const signIn = async (page: import('@playwright/test').Page, role: string) => {
   await page.goto('/sign-in');
@@ -59,4 +60,21 @@ test('a policy change is proposed by the administrator and approved by the appro
   const row = approver.getByTestId('settings').locator('tr', { hasText: reason });
   await row.getByRole('button', { name: 'Approve' }).click();
   await expect(row).toContainText('Active');
+});
+
+test('an administrator gives a new staff member their sign-in from the staff screen', async ({ page }) => {
+  const api = await staff('morgan');
+  const name = `Newhire ${Date.now().toString(36)}`;
+  const created = await api.post('/staff', { data: { preferredName: name, bookable: false } });
+  expect(created.status()).toBe(201);
+  await signIn(page, 'Spa manager');
+  await page.goto('/app/staff');
+  await page.getByTestId('team').getByRole('button', { name }).click();
+  const link = page.getByTestId('sign-in-link');
+  await expect(link).toBeVisible();
+  await page.locator('#signin-oid').fill(crypto.randomUUID());
+  await page.locator('#signin-email').fill('newhire@aarfid.dev');
+  await link.getByRole('button', { name: 'Give sign-in' }).click();
+  await expect(page.getByText('Sign-in linked', { exact: true })).toBeVisible();
+  await expect(link).toBeHidden();
 });

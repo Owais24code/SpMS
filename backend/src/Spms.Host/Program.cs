@@ -100,6 +100,12 @@ if (args.Contains("--migrate"))
     var applied = await DatabaseBootstrapper.MigrateAsync(ownerConnection, SpmsModules.Contributors(),
         app.Configuration["Database:MigrationRole"] ?? "spms_owner");
     app.Logger.LogInformation("Applied {Count} migration(s): {Names}", applied.Count, string.Join(", ", applied));
+
+    // A new deployment's first tenant, properties and administrators (idempotent; see Operations/Provisioning.cs).
+    var provision = app.Configuration.GetSection("Provision").Get<Spms.Host.Operations.ProvisionOptions>() ?? new();
+    if (provision.Requested)
+        await Spms.Host.Operations.Provisioning.RunAsync(ownerConnection, app.Configuration["Database:MigrationRole"] ?? "spms_owner",
+            provision, Spms.Host.Operations.Provisioning.IssuerFrom(app.Configuration), app.Logger);
     return;
 }
 
@@ -196,6 +202,7 @@ var api = app.MapGroup("").AddEndpointFilter<RequestTransactionFilter>();
 api.MapIdentityEndpoints();
 api.MapSpmsModules();
 api.MapSearch();
+Spms.Host.Identity.SignInLinks.MapSignInLinks(api);
 // Streams are outside the request transaction: a connection that lives for hours must not hold one.
 app.MapBoardStream();
 

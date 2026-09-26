@@ -1491,6 +1491,27 @@ await test('a role is proposed by one administrator and approved by another, the
   eq('Revoked', revoked.json.status);
 });
 
+await test('a sign-in links a staff member to one Entra account, once; then roles can be approved and they can sign in', async () => {
+  const oid = crypto.randomUUID();
+  const created = await call('POST', '/staff', { body: { preferredName: `Linked ${uniq()}`, bookable: false } });
+  eq(201, created.status, created.text);
+  eq(false, created.json.hasSignIn);
+  if (FGA) eq(403, (await call('POST', `/staff/${created.json.staffId}/sign-in`, { login: 'dana', headers: { 'If-Match': created.json.eTag }, body: { objectId: oid } })).status, 'the desk linked a sign-in');
+  eq(422, (await call('POST', `/staff/${created.json.staffId}/sign-in`, { headers: { 'If-Match': created.json.eTag }, body: { objectId: 'not-a-guid' } })).status);
+  const linked = await call('POST', `/staff/${created.json.staffId}/sign-in`, { headers: { 'If-Match': created.json.eTag }, body: { objectId: oid, email: 'linked@aarfid.dev' } });
+  eq(200, linked.status, linked.text);
+  eq(true, linked.json.hasSignIn);
+  eq(409, (await call('POST', `/staff/${created.json.staffId}/sign-in`, { headers: { 'If-Match': linked.json.eTag }, body: { objectId: crypto.randomUUID() } })).status, 'a second sign-in');
+  const other = await call('POST', '/staff', { body: { preferredName: `Other ${uniq()}` } });
+  eq(409, (await call('POST', `/staff/${other.json.staffId}/sign-in`, { headers: { 'If-Match': other.json.eTag }, body: { objectId: oid } })).status, 'one Entra account, two people');
+  const proposed = await call('POST', `/staff/${created.json.staffId}/roles`, { body: { roleCode: 'front_desk', tenantWide: true } });
+  eq(201, proposed.status, proposed.text);
+  eq(200, (await call('POST', `/role-assignments/${proposed.json.assignmentId}/approve`, { login: 'ada', headers: { 'If-Match': proposed.json.eTag } })).status);
+  const me = await call('GET', '/me', { login: oid });
+  eq(200, me.status, me.text);
+  ok(me.json.roles.includes('front_desk'), me.text);
+});
+
 await test('the HR file: HR writes it, the person reads their own, the desk and other staff do not; a credential number is only ever masked', async () => {
   const saved = await call('PUT', `/staff/${STAFF.lena}/hr`, { login: 'hugo', body: { employeeNumber: `E-${uniq()}`, firstName: 'Lena', lastName: 'Moreau',
     workerType: 'Employee', jobTitle: 'Massage therapist', personalEmail: 'lena.sweep@home.test' } });

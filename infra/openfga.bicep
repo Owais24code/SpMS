@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 // OpenFGA for SpMS on Azure Container Apps.
 //
-// Deployed separately from main.bicep (the static front end), into the same
+// Deployed alongside api.bicep (the scripted alternative to the portal runbook), into the same
 // resource group:
 //
 //   az deployment group create -g rg-spms-dev -f infra/openfga.bicep \

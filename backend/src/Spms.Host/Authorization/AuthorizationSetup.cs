@@ -50,7 +50,7 @@ public static class AuthorizationSetup
             return;
         }
         if (!holder.Ready && options.Bootstrap) await holder.BootstrapAsync(app.Logger);
-        if (!holder.Ready) throw new InvalidOperationException("Authorization:OpenFga:StoreId is not set and Bootstrap is off.");
+        if (!holder.Ready) await holder.AttachAsync(app.Logger);
         if (options.Bootstrap) await app.Services.GetRequiredService<FgaReconciler>().RunAsync();
     }
 

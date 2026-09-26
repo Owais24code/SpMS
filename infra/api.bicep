@@ -5,7 +5,7 @@
 //   az deployment group create -g rg-spms-dev -f infra/api.bicep \
 //     -p apiImage=<registry>/spms-api:<tag> pgAdminPassword=<secret> \
 //        entraAuthority=https://login.microsoftonline.com/<tenant>/v2.0 entraAudience=api://spms \
-//        webOrigin=https://<front-door-host>
+//        webOrigin=https://<front-end-host> openfgaPresharedKey=<secret>
 //
 // then deploy OpenFGA into the SAME environment (its ingress is internal):
 //
@@ -44,6 +44,10 @@ param location string = resourceGroup().location
 
 @description('API image, e.g. myregistry.azurecr.io/spms-api:1.2.3 (built from backend/Dockerfile).')
 param apiImage string
+
+@secure()
+@description('Preshared key the API presents to OpenFGA (the same value openfga.bicep reads as openfga-preshared-key).')
+param openfgaPresharedKey string
 
 @description('Registry server the image is pulled from; empty for a public registry.')
 param registryServer string = ''
@@ -100,8 +104,10 @@ param metricsKey string
 
 @minValue(1)
 param minReplicas int = 1
+@description('Keep at 1: the live board fans out in-process, so a second replica would not hear changes made on the first.')
 @minValue(1)
-param maxReplicas int = 4
+@maxValue(1)
+param maxReplicas int = 1
 
 var baseName = '${namePrefix}-${environmentName}'
 var pgServerName = '${baseName}-pg-${substring(uniqueString(resourceGroup().id), 0, 6)}'
@@ -177,6 +183,7 @@ var secretValues = [
   { name: 'metrics-key', value: metricsKey }
   { name: 'pg-owner-password', value: pgOwnerPassword }
   { name: 'pg-app-password', value: pgAppPassword }
+  { name: 'openfga-preshared-key', value: openfgaPresharedKey }
   { name: 'openfga-datastore-uri', value: 'postgres://${pgAdminLogin}:${uriComponent(pgAdminPassword)}@${pgHost}:5432/openfga?sslmode=require' }
 ]
 
@@ -260,6 +267,7 @@ var appSecrets = [
   { name: 'lookup-key', keyVaultUrl: '${kv}secrets/protection-lookup-key', identity: identity.id }
   { name: 'guest-signing', keyVaultUrl: '${kv}secrets/guest-signing-key', identity: identity.id }
   { name: 'metrics-key', keyVaultUrl: '${kv}secrets/metrics-key', identity: identity.id }
+  { name: 'openfga-key', keyVaultUrl: '${kv}secrets/openfga-preshared-key', identity: identity.id }
 ]
 var jobSecrets = concat(appSecrets, [
   { name: 'pg-admin', keyVaultUrl: '${kv}secrets/pg-admin-connection', identity: identity.id }
@@ -363,12 +371,6 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8080
         transport: 'http'
         allowInsecure: false
-        corsPolicy: {
-          allowedOrigins: [webOrigin]
-          allowedMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
-          allowedHeaders: ['*']
-          exposeHeaders: ['ETag', 'Location', 'X-Correlation-Id', 'Retry-After']
-        }
       }
     }
     template: {
@@ -381,6 +383,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'Auth__Audience', value: entraAudience }
             { name: 'Auth__GuestSigningKey', secretRef: 'guest-signing' }
             { name: 'Authorization__OpenFga__ApiUrl', value: openfgaUrl }
+            { name: 'Authorization__OpenFga__ApiToken', secretRef: 'openfga-key' }
             { name: 'Cors__AllowedOrigins__0', value: webOrigin }
             { name: 'Guest__Links__BaseUrl', value: webOrigin }
             { name: 'Observability__MetricsKey', secretRef: 'metrics-key' }

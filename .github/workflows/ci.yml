@@ -212,7 +212,6 @@ jobs:
         run: |
           curl -fsSL -o bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
           chmod +x bicep
-          ./bicep build infra/main.bicep --outfile /dev/null
           ./bicep build infra/openfga.bicep --outfile /dev/null
           ./bicep build infra/api.bicep --outfile /dev/null
 

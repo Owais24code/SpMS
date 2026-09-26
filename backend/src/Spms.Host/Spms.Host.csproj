@@ -33,4 +33,8 @@
     <!-- Generated with the fga CLI (model transform) from authorization/model.fga; CI checks it is current. -->
     <EmbeddedResource Include="..\..\..\authorization\model.json" LogicalName="Spms.Authorization.model.json" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- App Service WebJobs (migrate, nightly maintain, fga-sync): published with the app, run from the portal. -->
+    <None Include="App_Data\jobs\**" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
