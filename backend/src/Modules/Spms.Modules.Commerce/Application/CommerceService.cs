@@ -139,6 +139,7 @@ public sealed class CommerceService(
         }
         await Record(order, "commerce.order.create", null, ct);
         var view = await ViewAsync(order.CommerceOrderId, ct);
+        await db.SaveChangesAsync(ct); // the audit and outbox rows added above belong to this transaction
         db.ChangeTracker.Clear();
         await tx.CommitAsync(ct);
         return new(Outcome.Ok, view);
@@ -209,6 +210,7 @@ public sealed class CommerceService(
         await db.SaveChangesAsync(ct);
         await Record(o, "commerce.order.line_add", null, ct, new { line = number, n.LineKind, net, tax });
         var view = await ViewAsync(orderId, ct);
+        await db.SaveChangesAsync(ct); // the audit and outbox rows added above belong to this transaction
         db.ChangeTracker.Clear();
         await tx.CommitAsync(ct);
         return new(Outcome.Ok, view);
@@ -226,6 +228,7 @@ public sealed class CommerceService(
         await db.SaveChangesAsync(ct);
         await Record(o, "commerce.order.line_remove", null, ct, new { lineId });
         var view = await ViewAsync(orderId, ct);
+        await db.SaveChangesAsync(ct); // the audit and outbox rows added above belong to this transaction
         db.ChangeTracker.Clear();
         await tx.CommitAsync(ct);
         return new(Outcome.Ok, view);
@@ -256,6 +259,7 @@ public sealed class CommerceService(
         await db.SaveChangesAsync(ct);
         await Record(o, "commerce.order.place", "Draft", ct);
         var view = await ViewAsync(orderId, ct);
+        await db.SaveChangesAsync(ct); // the audit and outbox rows added above belong to this transaction
         db.ChangeTracker.Clear();
         await tx.CommitAsync(ct);
         return new(Outcome.Ok, view);
@@ -275,6 +279,7 @@ public sealed class CommerceService(
         await db.SaveChangesAsync(ct);
         await Record(o, "commerce.order.void", from, ct, new { reason });
         view = await ViewAsync(orderId, ct);
+        await db.SaveChangesAsync(ct); // the audit and outbox rows added above belong to this transaction
         db.ChangeTracker.Clear();
         await tx.CommitAsync(ct);
         return new(Outcome.Ok, view);
@@ -362,6 +367,7 @@ public sealed class CommerceService(
         db.Add(intent);
         await db.SaveChangesAsync(ct);
         var result = await ChargeAsync(intent, tender, paymentMethodToken, "Deposit", ct);
+        await db.SaveChangesAsync(ct); // the audit and outbox rows added above belong to this transaction
         db.ChangeTracker.Clear();
         await tx.CommitAsync(ct);
         return new(result.Outcome is GatewayOutcome.Unknown or GatewayOutcome.Pending ? Outcome.Ambiguous : Outcome.Ok, result);
@@ -395,6 +401,7 @@ public sealed class CommerceService(
             ToStatus: intent.Status, AfterData: new { outcome = looked.Outcome.ToString() }), ct);
         await db.SaveChangesAsync(ct);
         var result = new PaymentResult(intent, t, looked.Outcome, looked.Message);
+        await db.SaveChangesAsync(ct); // the audit and outbox rows added above belong to this transaction
         db.ChangeTracker.Clear();
         await tx.CommitAsync(ct);
         return new(Outcome.Ok, result);

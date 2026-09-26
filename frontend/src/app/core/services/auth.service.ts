@@ -76,7 +76,15 @@ export const ROLE_PRESETS = {
   },
   finance: {
     login: 'sam', roleCode: 'finance', name: 'Sam', property: 'All properties', roleLabel: 'Finance',
-    scopes: [SCOPES.read, SCOPES.commerce, SCOPES.reconcile],
+    scopes: [SCOPES.read, SCOPES.commerce, SCOPES.reconcile, SCOPES.admin],
+  },
+  inventory_manager: {
+    login: 'iris', roleCode: 'inventory_manager', name: 'Iris', property: 'Riverside Spa', roleLabel: 'Inventory manager',
+    scopes: [SCOPES.read, SCOPES.inventory],
+  },
+  hr_compliance: {
+    login: 'hugo', roleCode: 'hr_compliance', name: 'Hugo', property: 'All properties', roleLabel: 'HR & compliance',
+    scopes: [SCOPES.read, SCOPES.workforceRead],
   },
   housekeeping: {
     login: 'hana', roleCode: 'housekeeping', name: 'Hana', property: 'Riverside Spa', roleLabel: 'Housekeeping',

@@ -57,6 +57,7 @@ public sealed class RefundService(SpmsDbContext db, CommerceService commerce, IP
         db.Add(intent);
         await db.SaveChangesAsync(ct);
         await Publish(intent, "commerce.refund.request", null, ct);
+        await db.SaveChangesAsync(ct); // the audit and outbox rows added above belong to this transaction
         db.ChangeTracker.Clear();
         await tx.CommitAsync(ct);
         return new(Outcome.Ok, intent);
@@ -90,6 +91,7 @@ public sealed class RefundService(SpmsDbContext db, CommerceService commerce, IP
             await db.SaveChangesAsync(ct);
         }
         await Publish(intent, "commerce.refund.approve", "Requested", ct);
+        await db.SaveChangesAsync(ct); // the audit and outbox rows added above belong to this transaction
         db.ChangeTracker.Clear();
         await tx.CommitAsync(ct);
         return new(intent.Status == "Failed" ? Outcome.Failed : Outcome.Ok, intent, t);
@@ -105,6 +107,7 @@ public sealed class RefundService(SpmsDbContext db, CommerceService commerce, IP
         intent.ReasonCode = intent.ReasonCode is null ? reason : $"{intent.ReasonCode}; rejected: {reason}";
         await db.SaveChangesAsync(ct);
         await Publish(intent, "commerce.refund.reject", "Requested", ct);
+        await db.SaveChangesAsync(ct); // the audit and outbox rows added above belong to this transaction
         db.ChangeTracker.Clear();
         await tx.CommitAsync(ct);
         return new(Outcome.Ok, intent);
@@ -184,6 +187,7 @@ public sealed class DepositForfeitObserver(SpmsDbContext db, CommerceService com
         var settled = await db.Set<PaymentIntentRow>().AnyAsync(i => i.AppointmentId == id && (i.Purpose == "DepositApplied" || i.Purpose == "DepositForfeited"), ct);
         if (settled) return;
         foreach (var d in deposits) await commerce.SettleDepositAsync(d, "DepositForfeited", null, ct);
+        await db.SaveChangesAsync(ct); // the audit and outbox rows added above belong to this transaction
         db.ChangeTracker.Clear();
     }
 }

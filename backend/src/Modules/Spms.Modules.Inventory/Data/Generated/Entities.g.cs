@@ -164,7 +164,7 @@ public sealed partial class StockCountRow : IPropertyOwned, IVersioned, ICreated
     public decimal ExpectedQuantity { get; set; }
     public decimal? ObservedQuantity { get; set; }
     public decimal? RecountQuantity { get; set; }
-    public decimal VarianceQuantity { get; set; }
+    public decimal? VarianceQuantity { get; set; }
     public DateTimeOffset? CountedAt { get; set; }
     public Guid? CountedBy { get; set; }
     public Guid? ApprovedBy { get; set; }

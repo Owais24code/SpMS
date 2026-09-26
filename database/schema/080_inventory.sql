@@ -203,7 +203,7 @@ CREATE TABLE inventory.stock_count (
     expected_quantity              numeric(18,6) NOT NULL,
     observed_quantity              numeric(18,6),
     recount_quantity               numeric(18,6),
-    variance_quantity              numeric(18,6) GENERATED ALWAYS AS (coalesce(recount_quantity, observed_quantity) - expected_quantity) STORED NOT NULL,
+    variance_quantity              numeric(18,6) GENERATED ALWAYS AS (coalesce(recount_quantity, observed_quantity) - expected_quantity) STORED,
     counted_at                     timestamptz,
     counted_by                     uuid,
     approved_by                    uuid,
@@ -224,6 +224,7 @@ CREATE TABLE inventory.stock_count (
     CONSTRAINT stock_count_approver_not_counter CHECK (approved_by IS NULL OR approved_by IS DISTINCT FROM counted_by)
 );
 COMMENT ON TABLE inventory.stock_count IS 'Kept typed: a count has an approval step (counter != approver) before its variance posts.';
+COMMENT ON COLUMN inventory.stock_count.variance_quantity IS 'NULL until counted';
 
 ALTER TABLE inventory.inventory_item ADD CONSTRAINT inventory_item_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE inventory.inventory_item_variant ADD CONSTRAINT inventory_item_variant_inventory_item_id_fk FOREIGN KEY (tenant_id, inventory_item_id) REFERENCES inventory.inventory_item (tenant_id, inventory_item_id) ON DELETE RESTRICT;

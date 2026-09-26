@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Spms.Modules.Core.Data;
 using Spms.Modules.Core.Infrastructure;
+using Spms.Modules.Core.Settings;
 using Spms.Persistence;
 using Spms.SharedKernel;
 using Spms.Web;
@@ -17,6 +18,8 @@ public static class CoreModule
         services.AddSingleton<IModelContributor, CoreModelContributor>();
         services.AddScoped<IAuditSink, EfAuditSink>();
         services.AddScoped<SettingsReader>();
+        services.AddScoped<SettingsAdmin>();
+        services.AddScoped<IPropertyJob, SettingActivationJob>();
         services.AddScoped<IOutbox, EfOutbox>();
         services.AddScoped<AuditQueries>();
         services.AddSingleton<IIdempotencyStore, PostgresIdempotencyStore>();
@@ -33,6 +36,7 @@ public static class CoreModule
             var items = await audit.RecentAsync(ctx.PropertyId, take, entityId, ct);
             return Results.Json(new { items, count = items.Count }, Json.Options);
         });
+        app.MapSettings();
         return app;
     }
 }

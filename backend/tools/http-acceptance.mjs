@@ -1428,6 +1428,180 @@ await test('reconciliation is finance\'s: the day totals by tender, and the desk
   eq(200, sweep.status, sweep.text);
 });
 
+/* ------------------- reference data, staff, stock, settings ------------------- */
+
+const uniq = () => Math.random().toString(36).slice(2, 8);
+const STAFF = { lena: U(601), marco: U(602), priya: U(603) };
+const STOCK = { store: U(1101), laundry: U(1102), shelf: U(1103), towel: U(1301), oil: U(1303) };
+const farDay = (d) => { const x = new Date(Date.UTC(new Date().getUTCFullYear() + 2, 2, d, 14, 0, 0)); return x; };
+
+await test('the catalogue: only a manager drafts a service, edits need If-Match, codes are unique, a property sets its own price', async () => {
+  const code = `sweep-${uniq()}`;
+  if (FGA) eq(403, (await call('POST', '/catalog/services', { login: 'dana', body: { code, name: 'Nope', durationMinutes: 30 } })).status, 'the desk drafted a service');
+  eq(422, (await call('POST', '/catalog/services', { body: { code, name: 'Bad', durationMinutes: 7 } })).status, 'a 7-minute service');
+  const made = await call('POST', '/catalog/services', { body: { code, name: 'Sweep scrub', durationMinutes: 45, basePriceMinor: 9000 } });
+  eq(201, made.status, made.text);
+  eq('Draft', made.json.status);
+  eq(409, (await call('POST', '/catalog/services', { body: { code, name: 'Twin', durationMinutes: 45 } })).status, 'a duplicate code');
+  eq(422, (await call('PATCH', `/catalog/services/${made.json.serviceId}`, { body: { name: 'Renamed' } })).status, 'PATCH without If-Match');
+  const renamed = await call('PATCH', `/catalog/services/${made.json.serviceId}`, { body: { name: 'Sweep body scrub' }, headers: { 'If-Match': made.json.eTag } });
+  eq(200, renamed.status, renamed.text);
+  const stale = await call('PATCH', `/catalog/services/${made.json.serviceId}`, { body: { name: 'Stale' }, headers: { 'If-Match': made.json.eTag } });
+  eq(412, stale.status);
+  eq('STALE_VERSION', stale.json.code);
+  const active = await call('POST', `/catalog/services/${made.json.serviceId}/transitions`, { body: { to: 'Active' }, headers: { 'If-Match': renamed.json.eTag } });
+  eq('Active', active.json.status, active.text);
+  const offer = await call('PUT', `/catalog/offering/${made.json.serviceId}`, { body: { priceMinor: 9500, currencyCode: 'USD' } });
+  eq(201, offer.status, offer.text);
+  eq(422, (await call('PUT', `/catalog/offering/${made.json.serviceId}`, { body: { priceMinor: 9900, currencyCode: 'USD' } })).status, 'a second offer without If-Match');
+  const reprice = await call('PUT', `/catalog/offering/${made.json.serviceId}`, { body: { priceMinor: 9900, currencyCode: 'USD' }, headers: { 'If-Match': offer.json.eTag } });
+  eq(200, reprice.status, reprice.text);
+  const listed = await call('GET', '/catalog/offering', { login: 'dana' });
+  eq(9900, listed.json.find(o => o.service.serviceId === made.json.serviceId).effectivePriceMinor);
+});
+
+await test('a room closure refuses bookings inside it, and cancelling it frees the room', async () => {
+  const room = await call('POST', '/rooms', { body: { code: `SW${uniq()}`, name: 'Sweep room', resourceType: 'TreatmentRoom' } });
+  eq(201, room.status, room.text);
+  if (FGA) eq(403, (await call('POST', '/rooms', { login: 'riley', body: { code: `SW${uniq()}`, name: 'x', resourceType: 'TreatmentRoom' } })).status);
+  const day = new Date(Date.now() + 2 * 86400_000).toISOString().slice(0, 10);
+  const closure = await call('POST', '/rooms/closures', { body: { resourceId: room.json.roomId, startsUtc: `${day}T14:00:00Z`, endsUtc: `${day}T18:00:00Z`, reasonCode: 'Plumbing' } });
+  eq(201, closure.status, closure.text);
+  eq(409, (await call('POST', '/rooms/closures', { body: { resourceId: room.json.roomId, startsUtc: `${day}T15:00:00Z`, endsUtc: `${day}T16:00:00Z`, reasonCode: 'Twice' } })).status, 'overlapping closures');
+  const body = { guestId: G('g-closure'), guestAlias: 'Closure guest', serviceId: SVC.swedish, startUtc: `${day}T15:00:00Z`, roomId: room.json.roomId };
+  const refused = await call('POST', '/appointments', { body });
+  eq(409, refused.status, 'booked into a closed room');
+  ok(refused.text.includes('maintenance'), refused.text);
+  eq(200, (await call('POST', `/rooms/closures/${closure.json.maintenanceWindowId}/cancel`, { headers: { 'If-Match': closure.json.eTag } })).status);
+  eq(201, (await call('POST', '/appointments', { body })).status, 'the room is open again');
+});
+
+await test('a role is proposed by one administrator and approved by another, then revoked', async () => {
+  const proposed = await call('POST', `/staff/${STAFF.priya}/roles`, { body: { roleCode: 'scheduler' } });
+  eq(201, proposed.status, proposed.text);
+  eq('Proposed', proposed.json.status);
+  if (FGA) eq(403, (await call('POST', `/staff/${STAFF.priya}/roles`, { login: 'dana', body: { roleCode: 'spa_manager' } })).status, 'the desk proposed a role');
+  const self = await call('POST', `/role-assignments/${proposed.json.assignmentId}/approve`, { headers: { 'If-Match': proposed.json.eTag } });
+  eq(403, self.status, 'the proposer approved their own proposal');
+  const approved = await call('POST', `/role-assignments/${proposed.json.assignmentId}/approve`, { login: 'ada', headers: { 'If-Match': proposed.json.eTag } });
+  eq(200, approved.status, approved.text);
+  eq('Active', approved.json.status);
+  const revoked = await call('POST', `/role-assignments/${proposed.json.assignmentId}/revoke`, { body: { reason: 'sweep' }, headers: { 'If-Match': approved.json.eTag } });
+  eq(200, revoked.status, revoked.text);
+  eq('Revoked', revoked.json.status);
+});
+
+await test('the HR file: HR writes it, the person reads their own, the desk and other staff do not; a credential number is only ever masked', async () => {
+  const saved = await call('PUT', `/staff/${STAFF.lena}/hr`, { login: 'hugo', body: { employeeNumber: `E-${uniq()}`, firstName: 'Lena', lastName: 'Moreau',
+    workerType: 'Employee', jobTitle: 'Massage therapist', personalEmail: 'lena.sweep@home.test' } });
+  ok(saved.status === 201 || saved.status === 422 || saved.status === 409, saved.text);
+  const own = await call('GET', `/staff/${STAFF.lena}/hr`, { login: 'lena' });
+  eq(200, own.status, own.text);
+  eq(403, (await call('GET', `/staff/${STAFF.lena}/hr`, { login: 'dana' })).status);
+  if (FGA) eq(403, (await call('GET', `/staff/${STAFF.lena}/hr`, { login: 'marco' })).status, 'a colleague read the HR file');
+  const cred = await call('POST', `/staff/${STAFF.marco}/credentials`, { login: 'hugo', body: { credentialKind: 'License', licenseTypeCode: 'LMT', jurisdiction: 'US-NY',
+    number: 'NY-00456789', expiresAt: `${new Date().getUTCFullYear() + 3}-01-31` } });
+  eq(201, cred.status, cred.text);
+  eq('•••• 6789', cred.json.numberMasked);
+  ok(!cred.text.includes('00456789'), 'the number came back');
+  if (FGA) eq(403, (await call('POST', `/credentials/${cred.json.credentialId}/verify`, { login: 'morgan', body: {}, headers: { 'If-Match': cred.json.eTag } })).status, 'a manager verified a license');
+  const verified = await call('POST', `/credentials/${cred.json.credentialId}/verify`, { login: 'hugo', body: {}, headers: { 'If-Match': cred.json.eTag } });
+  eq('Verified', verified.json.status, verified.text);
+});
+
+await test('a licensed service is granted only on a verified license of its type (CON-003)', async () => {
+  const svc = await call('POST', '/catalog/services', { body: { code: `lic-${uniq()}`, name: 'Licensed sweep', durationMinutes: 60, requiredLicenseTypeCodes: ['EST'] } });
+  eq(201, svc.status, svc.text);
+  const early = await call('POST', `/staff/${STAFF.priya}/qualifications`, { body: { serviceId: svc.json.serviceId } });
+  eq(422, early.status, 'granted without the license');
+  const cred = await call('POST', `/staff/${STAFF.priya}/credentials`, { login: 'hugo', body: { credentialKind: 'License', licenseTypeCode: 'EST', number: '12345' } });
+  await call('POST', `/credentials/${cred.json.credentialId}/verify`, { login: 'hugo', body: {}, headers: { 'If-Match': cred.json.eTag } });
+  const granted = await call('POST', `/staff/${STAFF.priya}/qualifications`, { body: { serviceId: svc.json.serviceId } });
+  eq(201, granted.status, granted.text);
+  eq(409, (await call('POST', `/staff/${STAFF.priya}/qualifications`, { body: { serviceId: svc.json.serviceId } })).status, 'granted twice');
+});
+
+await test('the roster: shifts are drafted and published without overlap; leave is asked by the person and approved by the manager', async () => {
+  const a = farDay(3), b = farDay(4);
+  const shift = await call('POST', '/roster', { login: 'riley', body: { staffId: STAFF.priya, entryType: 'Shift', startsUtc: a.toISOString(), endsUtc: new Date(+a + 8 * 3600_000).toISOString() } });
+  eq(201, shift.status, shift.text);
+  eq('Draft', shift.json.status);
+  eq(200, (await call('POST', `/roster/${shift.json.workScheduleId}/publish`, { login: 'riley', body: {}, headers: { 'If-Match': shift.json.eTag } })).status);
+  const twin = await call('POST', '/roster', { login: 'riley', body: { staffId: STAFF.priya, entryType: 'Shift', startsUtc: new Date(+a + 3600_000).toISOString(), endsUtc: new Date(+a + 5 * 3600_000).toISOString() } });
+  eq(409, (await call('POST', `/roster/${twin.json.workScheduleId}/publish`, { login: 'riley', body: {}, headers: { 'If-Match': twin.json.eTag } })).status, 'two published shifts overlap');
+  if (FGA) eq(403, (await call('POST', '/roster', { login: 'lena', body: { staffId: STAFF.marco, entryType: 'Leave', leaveType: 'Planned', startsUtc: b.toISOString(), endsUtc: new Date(+b + 86400_000).toISOString() } })).status, 'leave for someone else');
+  const leave = await call('POST', '/roster', { login: 'lena', body: { staffId: STAFF.lena, entryType: 'Leave', leaveType: 'Planned', startsUtc: b.toISOString(), endsUtc: new Date(+b + 86400_000).toISOString() } });
+  eq(201, leave.status, leave.text);
+  eq('Requested', leave.json.status);
+  // Refused by OpenFGA (not a manager) or, without it, by the rule that leave is decided by someone else.
+  const selfApprove = await call('POST', `/roster/${leave.json.workScheduleId}/approve`, { login: 'lena', body: {}, headers: { 'If-Match': leave.json.eTag } });
+  ok([403, 409].includes(selfApprove.status), `self-approved leave: ${selfApprove.status}`);
+  const approved = await call('POST', `/roster/${leave.json.workScheduleId}/approve`, { login: 'morgan', body: {}, headers: { 'If-Match': leave.json.eTag } });
+  eq('Approved', approved.json.status, approved.text);
+});
+
+await test('stock: a receipt replays on its key, stock never goes negative, a transfer moves it, housekeeping soils and launders linen', async () => {
+  const key = `sweep-rcpt-${uniq()}`;
+  const body = { variantId: STOCK.oil, locationId: STOCK.store, movementType: 'Receipt', quantity: 12, unitCostMinor: 1900 };
+  const r1 = await call('POST', '/inventory/movements', { login: 'iris', headers: { 'Idempotency-Key': key }, body });
+  eq(201, r1.status, r1.text);
+  const r2 = await call('POST', '/inventory/movements', { login: 'iris', headers: { 'Idempotency-Key': key }, body });
+  eq(r1.json.entries[0].entryId, r2.json.entries[0].entryId, 'the replay posted again');
+  const over = await call('POST', '/inventory/movements', { login: 'iris', headers: { 'Idempotency-Key': `sweep-${uniq()}-x` }, body: { ...body, movementType: 'Issue', quantity: 99999 } });
+  eq(409, over.status, 'issued more than on hand');
+  if (FGA) eq(403, (await call('POST', '/inventory/movements', { login: 'hana', headers: { 'Idempotency-Key': `sweep-${uniq()}-y` }, body })).status, 'housekeeping received stock');
+  const moved = await call('POST', '/inventory/transfers', { login: 'iris', headers: { 'Idempotency-Key': `sweep-${uniq()}-t` },
+    body: { variantId: STOCK.oil, fromLocationId: STOCK.store, toLocationId: STOCK.shelf, quantity: 2 } });
+  eq(201, moved.status, moved.text);
+  eq(2, moved.json.entries.length);
+
+  const soil = await call('POST', '/inventory/state-changes', { login: 'hana', headers: { 'Idempotency-Key': `sweep-${uniq()}-s` },
+    body: { variantId: STOCK.towel, locationId: STOCK.store, fromState: 'Clean', toState: 'Soiled', quantity: 20 } });
+  eq(201, soil.status, soil.text);
+  const out = await call('POST', '/inventory/laundry', { login: 'hana', headers: { 'Idempotency-Key': `sweep-${uniq()}-l` },
+    body: { dispatchLocationId: STOCK.store, returnLocationId: STOCK.store, lines: [{ variantId: STOCK.towel, quantity: 20 }] } });
+  eq(201, out.status, out.text);
+  const back = await call('POST', `/inventory/laundry/${out.json.laundryBatchId}/receive`, { login: 'hana', headers: { 'If-Match': out.json.eTag },
+    body: { lines: [{ variantId: STOCK.towel, quantity: 18, lost: 2 }] } });
+  eq('Received', back.json.status, back.text);
+  const bal = await call('GET', `/inventory/balances?variantId=${STOCK.towel}`, { login: 'iris' });
+  const lost = bal.json.find(b => b.stockState === 'InLaundry');
+  eq(0, lost ? Number(lost.onHand) : 0, 'towels left in laundry');
+});
+
+await test('a stock count is approved by someone other than the counter, and its variance posts', async () => {
+  const opened = await call('POST', '/inventory/counts', { login: 'hana', body: { variantId: STOCK.oil, locationId: STOCK.shelf } });
+  eq(201, opened.status, opened.text);
+  const counted = await call('POST', `/inventory/counts/${opened.json.stockCountId}/record`, { login: 'hana', headers: { 'If-Match': opened.json.eTag }, body: { quantity: 1, reasonCode: 'Breakage' } });
+  eq('Counted', counted.json.status, counted.text);
+  if (FGA) eq(403, (await call('POST', `/inventory/counts/${opened.json.stockCountId}/approve`, { login: 'hana', headers: { 'If-Match': counted.json.eTag } })).status, 'housekeeping approved a count');
+  const approved = await call('POST', `/inventory/counts/${opened.json.stockCountId}/approve`, { login: 'iris', headers: { 'If-Match': counted.json.eTag } });
+  eq(200, approved.status, approved.text);
+  eq('Posted', approved.json.status);
+  const bal = await call('GET', `/inventory/balances?variantId=${STOCK.oil}&locationId=${STOCK.shelf}`, { login: 'iris' });
+  eq(1, Number(bal.json[0].onHand));
+
+  const mine = await call('POST', '/inventory/counts', { login: 'iris', body: { variantId: STOCK.oil, locationId: STOCK.store } });
+  const rec = await call('POST', `/inventory/counts/${mine.json.stockCountId}/record`, { login: 'iris', headers: { 'If-Match': mine.json.eTag }, body: { quantity: 5 } });
+  eq(403, (await call('POST', `/inventory/counts/${mine.json.stockCountId}/approve`, { login: 'iris', headers: { 'If-Match': rec.json.eTag } })).status, 'the counter approved their own count');
+});
+
+await test('a governed setting is proposed by an administrator and approved by a different person; the author cannot', async () => {
+  eq(422, (await call('POST', '/settings', { login: 'ada', body: { settingKey: 'policy.deposit', value: { percent: 500 }, reason: 'x' } })).status, 'a 500% deposit');
+  const p = await call('POST', '/settings', { login: 'ada', body: { settingKey: 'policy.cancellation', value: { noticeHours: 24, feePercent: 50 }, reason: 'Sweep: late cancellation fee' } });
+  eq(201, p.status, p.text);
+  eq('Proposed', p.json.status);
+  eq(403, (await call('POST', `/settings/${p.json.settingId}/approve`, { login: 'ada', body: {}, headers: { 'If-Match': p.json.eTag } })).status, 'the author approved');
+  const ok_ = await call('POST', `/settings/${p.json.settingId}/approve`, { login: 'sam', body: {}, headers: { 'If-Match': p.json.eTag } });
+  eq(200, ok_.status, ok_.text);
+  eq('Active', ok_.json.status);
+  const p2 = await call('POST', '/settings', { login: 'ada', body: { settingKey: 'policy.cancellation', value: { noticeHours: 12, feePercent: 25 }, reason: 'Sweep: softer' } });
+  await call('POST', `/settings/${p2.json.settingId}/approve`, { login: 'sam', body: {}, headers: { 'If-Match': p2.json.eTag } });
+  const all = await call('GET', '/settings?key=policy.cancellation', { login: 'ada' });
+  eq(1, all.json.filter(s => s.status === 'Active').length, 'two active values');
+  eq('Superseded', all.json.find(s => s.settingId === p.json.settingId).status);
+});
+
 /* ------------------------------ summary ------------------------------ */
 
 console.log();

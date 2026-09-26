@@ -56,6 +56,7 @@ export const WORKSPACE_NAV: readonly NavGroup[] = [
     label: 'Finance & setup',
     items: [
       { label: 'Reconciliation', path: '/app/reconciliation', icon: 'M4 7h16M4 12h16M4 17h9M17.5 15l2.5 2.5L17.5 20' },
+      { label: 'Setup',          path: '/app/setup',          icon: 'M4 6h10M4 12h16M4 18h7M17 4v4M20 10v4M13 16v4' },
       { label: 'Reports',        path: '/app/reports',        icon: 'M5 20V10M12 20V4M19 20v-7' },
       { label: 'Integrations',   path: '/app/integrations',   icon: 'M9 3v4M15 3v4M5 7h14v5a7 7 0 0 1-14 0zM12 19v2' },
       { label: 'Settings',       path: '/app/settings',       icon: 'M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 0 1-4 0v-.2A1.6 1.6 0 0 0 7.5 19.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 14.9a2 2 0 0 1 0-4h.2a1.6 1.6 0 0 0 1.1-2.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 9.1 3H9a2 2 0 0 1 4 0v.2a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 0 1 0 4h-.2a1.6 1.6 0 0 0-1.4 1.2z' },

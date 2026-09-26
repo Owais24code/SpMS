@@ -10,8 +10,10 @@ public static class InventoryModule
     public static IServiceCollection AddInventoryModule(this IServiceCollection services)
     {
         services.AddSingleton<IModelContributor, InventoryModelContributor>();
+        services.AddScoped<InventoryService>();
+        services.AddScoped<Spms.Modules.Scheduling.Domain.ISchedulingObserver, ConsumptionObserver>();
         return services;
     }
 
-    public static IEndpointRouteBuilder MapInventoryModule(this IEndpointRouteBuilder app) => app;
+    public static IEndpointRouteBuilder MapInventoryModule(this IEndpointRouteBuilder app) => app.MapInventory();
 }

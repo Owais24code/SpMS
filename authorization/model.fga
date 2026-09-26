@@ -58,7 +58,11 @@ type tenant
     define can_propose_role: security_admin or platform_admin
     define can_propose_configuration: platform_admin
     define can_approve_configuration: configuration_approver
-    define can_manage_staff: hr_compliance
+    define can_manage_staff: hr_compliance or spa_manager
+    # The tenant catalogue (services, options, tax): one menu for every property.
+    define can_manage_catalog: platform_admin or spa_manager
+    # SEC-014: a role is proposed by one administrator and approved by another (the table enforces "another").
+    define can_approve_role: security_admin or platform_admin
     # IDN-006 privacy requests are tenant-wide (the guest is); erasure is irreversible.
     define can_handle_privacy_request: security_admin or platform_admin
 
@@ -120,6 +124,15 @@ type property
     define can_schedule_messages: marketing
     define can_replay_integration: support
     define can_integrate: integration_service
+
+    # what this property offers: its services and prices, rooms, closures
+    define can_manage_offering: spa_manager
+    # rostering: shifts are drafted by the scheduler, leave is approved by the manager
+    define can_manage_roster: scheduler or spa_manager
+    define can_approve_leave: spa_manager
+    define can_manage_qualifications: spa_manager
+    # a stock count is approved by someone other than the counter (the table enforces "other")
+    define can_approve_count: inventory_manager or spa_manager
 
     # staff
     define can_read_staff_validity: spa_manager

@@ -199,7 +199,7 @@ public sealed class InventoryModelContributor : IModelContributor
             e.Property(x => x.ExpectedQuantity).HasColumnName("expected_quantity").HasColumnType("numeric(18,6)").IsRequired();
             e.Property(x => x.ObservedQuantity).HasColumnName("observed_quantity").HasColumnType("numeric(18,6)");
             e.Property(x => x.RecountQuantity).HasColumnName("recount_quantity").HasColumnType("numeric(18,6)");
-            e.Property(x => x.VarianceQuantity).HasColumnName("variance_quantity").HasColumnType("numeric(18,6)").IsRequired().HasComputedColumnSql("coalesce(recount_quantity, observed_quantity) - expected_quantity", stored: true);
+            e.Property(x => x.VarianceQuantity).HasColumnName("variance_quantity").HasColumnType("numeric(18,6)").HasComputedColumnSql("coalesce(recount_quantity, observed_quantity) - expected_quantity", stored: true);
             e.Property(x => x.CountedAt).HasColumnName("counted_at").HasColumnType("timestamp with time zone");
             e.Property(x => x.CountedBy).HasColumnName("counted_by").HasColumnType("uuid");
             e.Property(x => x.ApprovedBy).HasColumnName("approved_by").HasColumnType("uuid");

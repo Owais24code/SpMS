@@ -17,6 +17,7 @@ tuples:
   - {user: user:fin, relation: finance, object: tenant:t1}            # tenant-wide role
   - {user: user:hr, relation: hr_compliance, object: tenant:t1}
   - {user: user:house, relation: housekeeping, object: property:a1}
+  - {user: user:inv, relation: inventory_manager, object: property:a1}
   - {user: user:mkt, relation: marketing, object: property:a1}
   - {user: user:exec, relation: executive, object: tenant:t1}
   - {user: user:secadm, relation: security_admin, object: tenant:t1}
@@ -245,3 +246,33 @@ tests:
       - user: user:fin
         object: tenant:t1
         assertions: {can_handle_privacy_request: false}
+
+  - name: reference data, rostering, roles and counts (batch 6)
+    check:
+      - user: user:mgr
+        object: property:a1
+        assertions: {can_manage_offering: true, can_manage_roster: true, can_approve_leave: true, can_manage_qualifications: true, can_approve_count: true}
+      - user: user:sched
+        object: property:a1
+        assertions: {can_manage_offering: false, can_manage_roster: true, can_approve_leave: false}
+      - user: user:desk
+        object: property:a1
+        assertions: {can_manage_offering: false, can_manage_roster: false, can_adjust_inventory: false}
+      - user: user:inv
+        object: property:a1
+        assertions: {can_read_inventory: true, can_adjust_inventory: true, can_approve_count: true, can_manage_offering: false}
+      - user: user:house
+        object: property:a1
+        assertions: {can_read_inventory: true, can_adjust_inventory: false, can_move_stock_state: true, can_approve_count: false}
+      - user: user:admin
+        object: tenant:t1
+        assertions: {can_manage_catalog: true, can_propose_role: true, can_approve_role: true, can_propose_configuration: true, can_approve_configuration: false}
+      - user: user:approver
+        object: tenant:t1
+        assertions: {can_approve_configuration: true, can_propose_configuration: false, can_approve_role: false}
+      - user: user:hr
+        object: tenant:t1
+        assertions: {can_manage_staff: true, can_manage_catalog: false, can_approve_role: false}
+      - user: user:fin
+        object: tenant:t1
+        assertions: {can_manage_catalog: false, can_manage_staff: false}

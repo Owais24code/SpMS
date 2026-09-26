@@ -10,10 +10,12 @@
 --   tenant     01920000-0000-7000-8000-000000000001
 --   property   ...0101 Riverside (America/New_York), ...0102 Harbour (Europe/London)
 --   principals ...0201 Dana (front desk), ...0202 Morgan (spa manager + platform admin), ...0203-0205 providers,
---              ...0206 Riley (scheduler), ...0207 Sam (finance), ...0208 Ada (platform admin); dev logins by first name
+--              ...0206 Riley (scheduler), ...0207 Sam (finance + configuration approver), ...0208 Ada (platform admin),
+--              ...0209 Hana (housekeeping), ...0210 Iris (inventory), ...0211 Hugo (HR & compliance); dev logins by first name
 --   staff      ...0601 Lena, ...0602 Marco, ...0603 Priya, ...0604 Dana, ...0605 Morgan
 --   services   ...0401-0406   rooms ...0501-0506   guests ...0701-0705   appointments ...0801-0805
 --   spare rooms ...1001-1040 and walk-in guests ...2001-2040 (used by the HTTP sweep)
+--   stock      locations ...1101-1103, items ...1201-1204, variants ...1301-1304
 
 BEGIN;
 SELECT core.begin_scope('01920000-0000-7000-8000-000000000001',
@@ -42,7 +44,9 @@ INSERT INTO core.principal (principal_id, tenant_id, principal_type, display_nam
   ('01920000-0000-7000-8000-000000000206', '01920000-0000-7000-8000-000000000001', 'Staff', 'Riley (scheduler)'),
   ('01920000-0000-7000-8000-000000000207', '01920000-0000-7000-8000-000000000001', 'Staff', 'Sam (finance)'),
   ('01920000-0000-7000-8000-000000000208', '01920000-0000-7000-8000-000000000001', 'Staff', 'Ada (platform admin)'),
-  ('01920000-0000-7000-8000-000000000209', '01920000-0000-7000-8000-000000000001', 'Staff', 'Hana (housekeeping)')
+  ('01920000-0000-7000-8000-000000000209', '01920000-0000-7000-8000-000000000001', 'Staff', 'Hana (housekeeping)'),
+  ('01920000-0000-7000-8000-000000000210', '01920000-0000-7000-8000-000000000001', 'Staff', 'Iris (inventory)'),
+  ('01920000-0000-7000-8000-000000000211', '01920000-0000-7000-8000-000000000001', 'Staff', 'Hugo (HR & compliance)')
 ON CONFLICT (principal_id) DO NOTHING;
 
 -- Development logins: issuer 'spms-dev', subject = a readable handle.
@@ -55,7 +59,9 @@ INSERT INTO core.principal_login (principal_login_id, tenant_id, principal_id, l
   ('01920000-0000-7000-8000-000000000216', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000206', 'EntraUser', 'spms-dev', 'riley', 'riley@aarfid.dev'),
   ('01920000-0000-7000-8000-000000000217', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000207', 'EntraUser', 'spms-dev', 'sam', 'sam@aarfid.dev'),
   ('01920000-0000-7000-8000-000000000218', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000208', 'EntraUser', 'spms-dev', 'ada', 'ada@aarfid.dev'),
-  ('01920000-0000-7000-8000-000000000219', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000209', 'EntraUser', 'spms-dev', 'hana', 'hana@aarfid.dev')
+  ('01920000-0000-7000-8000-000000000219', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000209', 'EntraUser', 'spms-dev', 'hana', 'hana@aarfid.dev'),
+  ('01920000-0000-7000-8000-000000000220', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000210', 'EntraUser', 'spms-dev', 'iris', 'iris@aarfid.dev'),
+  ('01920000-0000-7000-8000-000000000221', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000211', 'EntraUser', 'spms-dev', 'hugo', 'hugo@aarfid.dev')
 ON CONFLICT (idp_issuer, idp_subject) DO NOTHING;
 
 INSERT INTO catalog.service (service_id, tenant_id, code, name, duration_minutes, base_price_minor, currency_code, status, online_bookable, requires_intake, tax_code, deposit_required) VALUES
@@ -105,7 +111,9 @@ INSERT INTO workforce.staff (staff_id, tenant_id, principal_id, home_property_id
   ('01920000-0000-7000-8000-000000000606', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000206', '01920000-0000-7000-8000-000000000101', 'Riley',  false),
   ('01920000-0000-7000-8000-000000000607', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000207', NULL,                                   'Sam',    false),
   ('01920000-0000-7000-8000-000000000608', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000208', NULL,                                   'Ada',    false),
-  ('01920000-0000-7000-8000-000000000609', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000209', '01920000-0000-7000-8000-000000000101', 'Hana',   false)
+  ('01920000-0000-7000-8000-000000000609', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000209', '01920000-0000-7000-8000-000000000101', 'Hana',   false),
+  ('01920000-0000-7000-8000-000000000610', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000210', '01920000-0000-7000-8000-000000000101', 'Iris',   false),
+  ('01920000-0000-7000-8000-000000000611', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000211', NULL, 'Hugo',   false)
 ON CONFLICT (staff_id) DO NOTHING;
 
 -- Roles, approved (the approver differs from the proposer, SEC-014).
@@ -120,7 +128,10 @@ VALUES
   ('01920000-0000-7000-8000-000000000617', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000101', '01920000-0000-7000-8000-000000000606', 'scheduler',   'Active', '01920000-0000-7000-8000-000000000202', now()),
   ('01920000-0000-7000-8000-000000000618', '01920000-0000-7000-8000-000000000001', NULL,                                   '01920000-0000-7000-8000-000000000607', 'finance',     'Active', '01920000-0000-7000-8000-000000000202', now()),
   ('01920000-0000-7000-8000-000000000619', '01920000-0000-7000-8000-000000000001', NULL,                                   '01920000-0000-7000-8000-000000000608', 'platform_admin', 'Active', '01920000-0000-7000-8000-000000000202', now()),
-  ('01920000-0000-7000-8000-000000000620', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000101', '01920000-0000-7000-8000-000000000609', 'housekeeping', 'Active', '01920000-0000-7000-8000-000000000202', now())
+  ('01920000-0000-7000-8000-000000000620', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000101', '01920000-0000-7000-8000-000000000609', 'housekeeping', 'Active', '01920000-0000-7000-8000-000000000202', now()),
+  ('01920000-0000-7000-8000-000000000621', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000101', '01920000-0000-7000-8000-000000000610', 'inventory_manager', 'Active', '01920000-0000-7000-8000-000000000202', now()),
+  ('01920000-0000-7000-8000-000000000622', '01920000-0000-7000-8000-000000000001', NULL, '01920000-0000-7000-8000-000000000611', 'hr_compliance', 'Active', '01920000-0000-7000-8000-000000000202', now()),
+  ('01920000-0000-7000-8000-000000000623', '01920000-0000-7000-8000-000000000001', NULL, '01920000-0000-7000-8000-000000000607', 'configuration_approver', 'Active', '01920000-0000-7000-8000-000000000208', now())
 ON CONFLICT (staff_role_assignment_id) DO NOTHING;
 
 -- CON-003 source of truth. Priya is deliberately NOT qualified for massage, so
@@ -185,6 +196,46 @@ VALUES ('01920000-0000-7000-8000-000000000901', '01920000-0000-7000-8000-0000000
          ]}',
         'Published', now(), '01920000-0000-7000-8000-000000000202', now())
 ON CONFLICT (form_definition_id) DO NOTHING;
+
+-- Stock at Riverside: a store, the laundry room and the retail shelf; towels,
+-- robes and oil held there. Each opening balance is its own Receipt in the
+-- ledger, so the balance is the ledger's sum from the first day.
+INSERT INTO resources.location (location_id, tenant_id, property_id, location_code, location_name, location_type) VALUES
+  ('01920000-0000-7000-8000-000000001101', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000101', 'STORE', 'Main store', 'Storage'),
+  ('01920000-0000-7000-8000-000000001102', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000101', 'LAUNDRY', 'Laundry room', 'Laundry'),
+  ('01920000-0000-7000-8000-000000001103', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000101', 'SHELF', 'Retail shelf', 'Retail')
+ON CONFLICT (location_id) DO NOTHING;
+
+INSERT INTO inventory.inventory_item (inventory_item_id, tenant_id, item_code, item_name, item_kind, reorder_point) VALUES
+  ('01920000-0000-7000-8000-000000001201', '01920000-0000-7000-8000-000000000001', 'towel-bath', 'Bath towel', 'Linen', 60),
+  ('01920000-0000-7000-8000-000000001202', '01920000-0000-7000-8000-000000000001', 'robe', 'Robe', 'Linen', 20),
+  ('01920000-0000-7000-8000-000000001203', '01920000-0000-7000-8000-000000000001', 'oil-massage', 'Massage oil 500 ml', 'Professional', 6),
+  ('01920000-0000-7000-8000-000000001204', '01920000-0000-7000-8000-000000000001', 'lotion-retail', 'Body lotion 200 ml', 'Retail', 10)
+ON CONFLICT (inventory_item_id) DO NOTHING;
+
+INSERT INTO inventory.inventory_item_variant (inventory_item_variant_id, tenant_id, inventory_item_id, variant_code, barcode, sell_price_minor, currency_code, tax_code) VALUES
+  ('01920000-0000-7000-8000-000000001301', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000001201', 'TOWEL-BATH-WHT', NULL, NULL, NULL, NULL),
+  ('01920000-0000-7000-8000-000000001302', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000001202', 'ROBE-M', NULL, NULL, NULL, NULL),
+  ('01920000-0000-7000-8000-000000001303', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000001203', 'OIL-500', NULL, NULL, NULL, NULL),
+  ('01920000-0000-7000-8000-000000001304', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000001204', 'LOTION-200', '0012345678905', 2800, 'USD', 'SPA')
+ON CONFLICT (inventory_item_variant_id) DO NOTHING;
+
+INSERT INTO inventory.inventory_ledger_entry (entry_id, tenant_id, property_id, inventory_item_variant_id, location_id, stock_state, movement_type,
+                                              quantity, unit_cost_minor, value_delta_minor, reason_code, idempotency_key, occurred_at)
+SELECT o.id::uuid, '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000101', o.variant::uuid, o.loc::uuid, o.state, 'Receipt', o.qty, o.cost, o.qty * o.cost, 'Opening', 'seed:' || o.id, '2026-01-01T00:00:00Z'
+  FROM (VALUES ('01920000-0000-7000-8000-000000001401', '01920000-0000-7000-8000-000000001301', '01920000-0000-7000-8000-000000001101', 'Clean', 200, 900),
+               ('01920000-0000-7000-8000-000000001402', '01920000-0000-7000-8000-000000001302', '01920000-0000-7000-8000-000000001101', 'Clean', 40, 3500),
+               ('01920000-0000-7000-8000-000000001403', '01920000-0000-7000-8000-000000001303', '01920000-0000-7000-8000-000000001101', 'Saleable', 24, 1800),
+               ('01920000-0000-7000-8000-000000001404', '01920000-0000-7000-8000-000000001304', '01920000-0000-7000-8000-000000001103', 'Saleable', 30, 1100)) o(id, variant, loc, state, qty, cost)
+ WHERE NOT EXISTS (SELECT 1 FROM inventory.inventory_ledger_entry e WHERE e.idempotency_key = 'seed:' || o.id);
+
+INSERT INTO inventory.inventory_location_balance (inventory_location_balance_id, tenant_id, property_id, inventory_item_variant_id, location_id, stock_state, on_hand, unit_cost_minor)
+SELECT b.id::uuid, '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000101', b.variant::uuid, b.loc::uuid, b.state, b.qty, b.cost
+  FROM (VALUES ('01920000-0000-7000-8000-000000001501', '01920000-0000-7000-8000-000000001301', '01920000-0000-7000-8000-000000001101', 'Clean', 200, 900),
+               ('01920000-0000-7000-8000-000000001502', '01920000-0000-7000-8000-000000001302', '01920000-0000-7000-8000-000000001101', 'Clean', 40, 3500),
+               ('01920000-0000-7000-8000-000000001503', '01920000-0000-7000-8000-000000001303', '01920000-0000-7000-8000-000000001101', 'Saleable', 24, 1800),
+               ('01920000-0000-7000-8000-000000001504', '01920000-0000-7000-8000-000000001304', '01920000-0000-7000-8000-000000001103', 'Saleable', 30, 1100)) b(id, variant, loc, state, qty, cost)
+ON CONFLICT (inventory_location_balance_id) DO NOTHING;
 
 -- Commerce: sales tax (code SPA on every service above) at Riverside, and the deposit policy (proposed by Morgan, approved by Sam:
 -- a governed setting is never approved by its author).

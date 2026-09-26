@@ -38,9 +38,16 @@ const workspaceRoutes: Routes = [
   { path: 'waitlist',       title: 'Waitlist — SpMS',       canActivate: [scopeGuard(SCOPES.read)],       loadComponent: () => import('./features/waitlist/waitlist').then((m) => m.Waitlist) },
   { path: 'turnover',       title: 'Room turnover — SpMS',  canActivate: [scopeGuard(SCOPES.read)],       loadComponent: () => import('./features/turnover/turnover').then((m) => m.Turnover) },
   { path: 'messaging',      title: 'Messaging — SpMS',      canActivate: [scopeGuard(SCOPES.messaging)], loadComponent: () => import('./features/messaging/messaging').then((m) => m.Messaging) },
-  { path: 'inventory',      title: 'Inventory — SpMS',      canActivate: [scopeGuard(SCOPES.inventory)], loadComponent: () => import('./features/inventory/inventory').then((m) => m.Inventory) },
+  { path: 'inventory',      title: 'Inventory — SpMS',      canActivate: [scopeGuard(SCOPES.inventory)],
+    loadComponent: () => environment.useRealApi
+      ? import('./features/inventory/inventory-live').then((m) => m.InventoryLive)
+      : import('./features/inventory/inventory').then((m) => m.Inventory) },
   { path: 'devices',        title: 'Devices — SpMS',        canActivate: [scopeGuard(SCOPES.device)],   loadComponent: () => import('./features/devices/devices').then((m) => m.Devices) },
-  { path: 'staff',          title: 'Staff — SpMS',          canActivate: [scopeGuard(SCOPES.workforceRead)],    loadComponent: () => import('./features/staff/staff').then((m) => m.Staff) },
+  { path: 'staff',          title: 'Staff — SpMS',          canActivate: [scopeGuard(SCOPES.workforceRead)],
+    loadComponent: () => environment.useRealApi
+      ? import('./features/staff/staff-live').then((m) => m.StaffLive)
+      : import('./features/staff/staff').then((m) => m.Staff) },
+  { path: 'setup',          title: 'Setup — SpMS',          canActivate: [scopeGuard(SCOPES.read)],       loadComponent: () => import('./features/setup/setup').then((m) => m.Setup) },
   { path: 'checkout',       title: 'Checkout — SpMS',       canActivate: [scopeGuard(SCOPES.commerce)],   loadComponent: () => import('./features/checkout/checkout').then((m) => m.Checkout) },
   { path: 'reconciliation', title: 'Reconciliation — SpMS', canActivate: [scopeGuard(SCOPES.reconcile)],
     loadComponent: () => environment.useRealApi

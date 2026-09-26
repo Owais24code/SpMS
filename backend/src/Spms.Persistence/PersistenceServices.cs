@@ -41,6 +41,7 @@ public static class PersistenceServices
         });
 
         services.AddScoped<IUnitOfWork, EfUnitOfWork>();
+        services.AddScoped<MasterData>();
         return services;
     }
 }

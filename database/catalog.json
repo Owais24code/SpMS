@@ -9319,10 +9319,10 @@
     {
      "name": "variance_quantity",
      "type": "numeric(18,6) GENERATED ALWAYS AS (coalesce(recount_quantity, observed_quantity) - expected_quantity) STORED",
-     "nullable": false,
+     "nullable": true,
      "fk": null,
      "restricted": false,
-     "doc": ""
+     "doc": "NULL until counted"
     },
     {
      "name": "counted_at",

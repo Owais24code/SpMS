@@ -10,8 +10,9 @@ public static class CatalogModule
     public static IServiceCollection AddCatalogModule(this IServiceCollection services)
     {
         services.AddSingleton<IModelContributor, CatalogModelContributor>();
+        services.AddScoped<CatalogService>();
         return services;
     }
 
-    public static IEndpointRouteBuilder MapCatalogModule(this IEndpointRouteBuilder app) => app;
+    public static IEndpointRouteBuilder MapCatalogModule(this IEndpointRouteBuilder app) => app.MapCatalog();
 }

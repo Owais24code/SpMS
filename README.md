@@ -348,13 +348,13 @@ Work is delivered in eight batches. Each is one commit on `main`.
 | 3 | Scheduling completion: tenant-wide CON-005, undo window, all-or-nothing bulk move, hold expiry, visits, waitlist, room turnover; desk check-in, undo, waitlist and turnover screens on the API | Done |
 | 4 | Guests and intake: profiles and search, reviewed merge and split, delegation, consent, privacy requests with export and erasure; intake and treatment notes under `spms_intake` with envelope encryption; Guests, live booking, provider tablet and guest intake screens | Done |
 | 5 | Commerce and payments: orders, deposits, refunds with dual approval, reconciliation, payment ownership, provider-agnostic port; Checkout and live Reconciliation screens | Done |
-| 6 | Catalogue, resources, workforce, inventory CRUD and settings approval | Planned |
+| 6 | Reference data: catalogue and property offering, rooms and closures, staff with HR file, roles, qualifications, credentials and roster, stock ledger with counts and laundry, governed settings; Staff, Inventory and Setup screens | Done |
 | 7 | Messaging, reporting, devices, integrations, Marquee mode | Planned |
 | 8 | Operating mode, search, live board, partition/retention jobs, API + PostgreSQL bicep, observability | Planned |
 
-**Verified (batch 5):** backend 221/221 tests against PostgreSQL 16 and OpenFGA 1.10.2; HTTP
-sweep 105/105 in permissive and real-FGA modes; `fga model test` 12/12 tests (103 checks); web
-unit tests 12/12; Playwright e2e 13/13.
+**Verified (batch 6):** backend 227/227 tests against PostgreSQL 16 and OpenFGA 1.10.2; HTTP
+sweep 114/114 in permissive and real-FGA modes; `fga model test` 13/13 tests (135 checks); web
+unit tests 12/12; Playwright e2e 16/16.
 
 **Scheduling operations (batch 3):**
 
@@ -376,6 +376,43 @@ unit tests 12/12; Playwright e2e 13/13.
 - **Room turnover** (`/turnaround`): a completed treatment creates a Turnover task. Housekeeping
   (`spa.inventory` plus `can_update_room_readiness`) completes it. `/front-desk/arrivals` reports the
   room as not ready while the task is open.
+
+**Reference data (batch 6):**
+
+- **Catalogue** (`/catalog/services`, `can_manage_catalog`). A service is drafted, activated, withdrawn
+  and retired, never deleted. Edits need `If-Match`, and codes are unique. A change never reaches
+  existing bookings, because each appointment froze its price and duration. `/catalog/offering`
+  shows what this property offers and at what price (`property_service`, `can_manage_offering`).
+  A new tax rate is a new row from its date and ends the old one there.
+- **Rooms and closures** (`/rooms`, `/rooms/closures`). A room is retired rather than deleted. Closures
+  of one room cannot overlap (the database's exclusion), and scheduling refuses a booking inside one.
+- **Staff** (`/staff`). The operational profile is visible to everyone. The HR file (`/staff/{id}/hr`)
+  is visible only to HR and to the person (`staff_record` in OpenFGA). A role is proposed by one
+  administrator and approved by another (`can_approve_role`; the database refuses self-approval),
+  and reaches OpenFGA through the outbox. A qualification for a licensed service needs a verified,
+  unexpired credential of each type the service names (CON-003). Credential numbers are encrypted
+  and shown as `•••• 1234`. The `workforce.credential-expiry` job expires lapsed credentials and the
+  qualifications granted on them.
+- **Roster** (`/roster`). Shifts are drafted and published by the scheduler, and published shifts
+  cannot overlap. Anyone may request their own leave; a manager, never the requester, approves it.
+  Scheduling reads published shifts and approved leave.
+- **Stock** (`/inventory/*`). Every movement is a ledger entry, and the balance is updated in the same
+  transaction under a row lock. An ordinary movement never takes stock below zero. Movements need an
+  `Idempotency-Key`, and a retry is a replay. Transfers post a pair. Housekeeping moves linen Clean →
+  Soiled → laundry → Clean, and losses are recorded. A count is approved by someone other than the
+  counter, and its variance is posted against the stock at approval. A completed treatment consumes
+  its service's supplies (`service_supply`) in its own savepoint, so bookkeeping never fails a
+  treatment.
+- **Governed settings** (`/settings`). A change is proposed with a reason and approved by a different
+  person (`can_propose_configuration` / `can_approve_configuration`). Approval closes the value it
+  replaces at its effective date; a future value waits (`core.setting-activation`). Known keys
+  (`policy.deposit`, `policy.cancellation`, `messaging.quiet_hours`, `retention.*`) are shape-checked.
+- **Seed.** Iris (inventory manager) and Hugo (HR & compliance) are new, and Sam is also the
+  configuration approver. The seed adds stock locations, towels, robes, oil and a retail lotion with
+  opening receipts.
+- **Screens.** Staff (profile, HR file, roles, qualifications, credentials, roster), Inventory
+  (balances, movements, counts, laundry) and Setup (catalogue and prices, rooms and closures,
+  policies) run on the API.
 
 **Commerce and payments (batch 5):**
 

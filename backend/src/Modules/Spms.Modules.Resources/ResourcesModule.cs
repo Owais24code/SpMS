@@ -10,8 +10,9 @@ public static class ResourcesModule
     public static IServiceCollection AddResourcesModule(this IServiceCollection services)
     {
         services.AddSingleton<IModelContributor, ResourcesModelContributor>();
+        services.AddScoped<ResourceService>();
         return services;
     }
 
-    public static IEndpointRouteBuilder MapResourcesModule(this IEndpointRouteBuilder app) => app;
+    public static IEndpointRouteBuilder MapResourcesModule(this IEndpointRouteBuilder app) => app.MapResources();
 }

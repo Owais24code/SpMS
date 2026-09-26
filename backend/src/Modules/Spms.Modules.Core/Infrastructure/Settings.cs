@@ -19,7 +19,7 @@ public sealed class SettingsReader(SpmsDbContext db, IClock clock)
         var now = clock.UtcNow;
         var property = db.Scope.CurrentPropertyId;
         var rows = await db.Set<SettingRow>().AsNoTracking()
-            .Where(s => s.SettingKey == key && s.DeploymentScope == deploymentScope && s.Status == SettingStatuses.Active
+            .Where(s => s.SettingKey == key && s.DeploymentScope == deploymentScope && (s.Status == SettingStatuses.Active || s.Status == SettingStatuses.Approved)
                         && s.EffectiveFrom <= now && (s.EffectiveTo == null || s.EffectiveTo > now)
                         && (s.PropertyId == null || s.PropertyId == property))
             .OrderByDescending(s => s.PropertyId != null)
