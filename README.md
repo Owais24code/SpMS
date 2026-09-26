@@ -347,14 +347,14 @@ Work is delivered in eight batches. Each is one commit on `main`.
 | 2 | Identity and authorization: Entra JWT, principal resolution, OpenFGA checks and tuple sync, guest magic links; MSAL / dev-login sign-in, property switcher, guest landing | Done |
 | 3 | Scheduling completion: tenant-wide CON-005, undo window, all-or-nothing bulk move, hold expiry, visits, waitlist, room turnover; desk check-in, undo, waitlist and turnover screens on the API | Done |
 | 4 | Guests and intake: profiles and search, reviewed merge and split, delegation, consent, privacy requests with export and erasure; intake and treatment notes under `spms_intake` with envelope encryption; Guests, live booking, provider tablet and guest intake screens | Done |
-| 5 | Commerce and payments: orders, deposits, refunds with dual approval, provider-agnostic port | Planned |
+| 5 | Commerce and payments: orders, deposits, refunds with dual approval, reconciliation, payment ownership, provider-agnostic port; Checkout and live Reconciliation screens | Done |
 | 6 | Catalogue, resources, workforce, inventory CRUD and settings approval | Planned |
 | 7 | Messaging, reporting, devices, integrations, Marquee mode | Planned |
 | 8 | Operating mode, search, live board, partition/retention jobs, API + PostgreSQL bicep, observability | Planned |
 
-**Verified (batch 4):** backend 213/213 tests against PostgreSQL 16 and OpenFGA 1.10.2; HTTP
-sweep 100/100 in permissive and real-FGA modes; `fga model test` 12/12 tests (103 checks); web
-unit tests 10/10; Playwright e2e 12/12.
+**Verified (batch 5):** backend 221/221 tests against PostgreSQL 16 and OpenFGA 1.10.2; HTTP
+sweep 105/105 in permissive and real-FGA modes; `fga model test` 12/12 tests (103 checks); web
+unit tests 12/12; Playwright e2e 13/13.
 
 **Scheduling operations (batch 3):**
 
@@ -376,6 +376,37 @@ unit tests 10/10; Playwright e2e 12/12.
 - **Room turnover** (`/turnaround`): a completed treatment creates a Turnover task. Housekeeping
   (`spa.inventory` plus `can_update_room_readiness`) completes it. `/front-desk/arrivals` reports the
   room as not ready while the task is open.
+
+**Commerce and payments (batch 5):**
+
+- **Orders** (`/orders`). A cart is a Draft order. A line for a booking takes the price frozen on the
+  booking, not today's catalogue, and tax from `catalog.tax_rule` (the property's rule over the
+  tenant's). A Discount line is a comp and needs `can_approve_comp`. Placing the order (`If-Match`)
+  numbers it (`ORD…`) and applies any deposits for its bookings. It is Paid once approved money
+  covers the total, and the receipt number (`RCT…`) is issued then. Money is integer minor units.
+- **Payments** (`/orders/{id}/payments`, `/appointments/{id}/deposit`) require an `Idempotency-Key`,
+  and so does every call to the provider. A retried request is the same payment. When the provider
+  does not confirm, the answer is `202 PAYMENT_OUTCOME_AMBIGUOUS` with the intent to query (BR-014).
+  `POST /payment-intents/{id}/resolve` looks up the original and never charges again; the
+  `commerce.ambiguous-payments` job does the same every minute. The provider is behind
+  `IPaymentGateway` (DEC-010 is open). The development provider is deterministic by token:
+  `tok_approve`, `tok_decline`, `tok_error`, and `tok_timeout` (unknown until a lookup). Card data never
+  reaches SpMS, only the provider's token for it.
+- **Deposits** follow the governed setting `policy.deposit` (`{"percent":50,"minimumMinor":2000}` in
+  the seed; hot stone requires one). The arrivals list reports Pending or Settled. A no-show forfeits
+  the deposit in the no-show's own transaction, through an `ISchedulingObserver`.
+- **Refunds** (`/payment-transactions/{id}/refunds`) are requested at the desk and approved by finance
+  (`can_refund`), never by the requester. The service checks this and so does the database's dual
+  control. A refund cannot exceed what is left of the original sale.
+- **Ownership** (DEC-001). Exactly one system owns payment at a property at an instant. With no
+  explicit `core.capability_ownership` row, a Standalone property owns its own. A Marquee-integrated
+  property with no decision answers `OWNERSHIP_AMBIGUOUS`. When Marquee owns payment the order is
+  Delegated, SpMS records the `CreateCart` call it owes, and it takes no money.
+- **Reconciliation** (`/reconciliation?date=`, finance: `spa.reconcile` plus `can_reconcile`) gives
+  the property's day by tender, the unconfirmed payments, and the refunds waiting for approval.
+- **Screens.** Checkout (`/app/checkout`) covers deposits, the bill, tips and comps, card or cash, a
+  "waiting for the provider" state that hides Pay, and refund requests. Reconciliation runs on the
+  API when `useRealApi` is set.
 
 **Guests and intake (batch 4):**
 

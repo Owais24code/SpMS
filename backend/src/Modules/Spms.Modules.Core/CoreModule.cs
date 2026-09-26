@@ -16,6 +16,7 @@ public static class CoreModule
     {
         services.AddSingleton<IModelContributor, CoreModelContributor>();
         services.AddScoped<IAuditSink, EfAuditSink>();
+        services.AddScoped<SettingsReader>();
         services.AddScoped<IOutbox, EfOutbox>();
         services.AddScoped<AuditQueries>();
         services.AddSingleton<IIdempotencyStore, PostgresIdempotencyStore>();

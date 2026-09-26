@@ -58,13 +58,13 @@ INSERT INTO core.principal_login (principal_login_id, tenant_id, principal_id, l
   ('01920000-0000-7000-8000-000000000219', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000209', 'EntraUser', 'spms-dev', 'hana', 'hana@aarfid.dev')
 ON CONFLICT (idp_issuer, idp_subject) DO NOTHING;
 
-INSERT INTO catalog.service (service_id, tenant_id, code, name, duration_minutes, base_price_minor, currency_code, status, online_bookable, requires_intake) VALUES
-  ('01920000-0000-7000-8000-000000000401', '01920000-0000-7000-8000-000000000001', 'deep-90',     'Deep tissue 90',  90, 16000, 'USD', 'Active', true,  true),
-  ('01920000-0000-7000-8000-000000000402', '01920000-0000-7000-8000-000000000001', 'aroma-60',    'Aromatherapy 60', 60, 12000, 'USD', 'Active', true,  true),
-  ('01920000-0000-7000-8000-000000000403', '01920000-0000-7000-8000-000000000001', 'facial-45',   'Facial 45',       45,  9500, 'USD', 'Active', true,  false),
-  ('01920000-0000-7000-8000-000000000404', '01920000-0000-7000-8000-000000000001', 'hotstone-60', 'Hot stone 60',    60, 13500, 'USD', 'Active', true,  true),
-  ('01920000-0000-7000-8000-000000000405', '01920000-0000-7000-8000-000000000001', 'swedish-60',  'Swedish 60',      60, 11000, 'USD', 'Active', true,  true),
-  ('01920000-0000-7000-8000-000000000406', '01920000-0000-7000-8000-000000000001', 'peel-30',     'Peel 30',         30,  7000, 'USD', 'Active', false, false)
+INSERT INTO catalog.service (service_id, tenant_id, code, name, duration_minutes, base_price_minor, currency_code, status, online_bookable, requires_intake, tax_code, deposit_required) VALUES
+  ('01920000-0000-7000-8000-000000000401', '01920000-0000-7000-8000-000000000001', 'deep-90',     'Deep tissue 90',  90, 16000, 'USD', 'Active', true,  true, 'SPA', false),
+  ('01920000-0000-7000-8000-000000000402', '01920000-0000-7000-8000-000000000001', 'aroma-60',    'Aromatherapy 60', 60, 12000, 'USD', 'Active', true,  true, 'SPA', false),
+  ('01920000-0000-7000-8000-000000000403', '01920000-0000-7000-8000-000000000001', 'facial-45',   'Facial 45',       45,  9500, 'USD', 'Active', true,  false, 'SPA', false),
+  ('01920000-0000-7000-8000-000000000404', '01920000-0000-7000-8000-000000000001', 'hotstone-60', 'Hot stone 60',    60, 13500, 'USD', 'Active', true,  true, 'SPA', true),
+  ('01920000-0000-7000-8000-000000000405', '01920000-0000-7000-8000-000000000001', 'swedish-60',  'Swedish 60',      60, 11000, 'USD', 'Active', true,  true, 'SPA', false),
+  ('01920000-0000-7000-8000-000000000406', '01920000-0000-7000-8000-000000000001', 'peel-30',     'Peel 30',         30,  7000, 'USD', 'Active', false, false, 'SPA', false)
 ON CONFLICT (service_id) DO NOTHING;
 
 INSERT INTO catalog.property_service (tenant_id, property_id, service_id)
@@ -185,5 +185,19 @@ VALUES ('01920000-0000-7000-8000-000000000901', '01920000-0000-7000-8000-0000000
          ]}',
         'Published', now(), '01920000-0000-7000-8000-000000000202', now())
 ON CONFLICT (form_definition_id) DO NOTHING;
+
+-- Commerce: sales tax (code SPA on every service above) at Riverside, and the deposit policy (proposed by Morgan, approved by Sam:
+-- a governed setting is never approved by its author).
+INSERT INTO catalog.tax_rule (tax_rule_id, tenant_id, property_id, tax_code, jurisdiction, rate, status, effective_from)
+VALUES ('01920000-0000-7000-8000-000000000951', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000101',
+        'SPA', 'US-NY', 0.08875, 'Active', '2020-01-01T00:00:00Z')
+ON CONFLICT (tax_rule_id) DO NOTHING;
+
+INSERT INTO core.setting (setting_id, tenant_id, property_id, setting_key, value_json, reason, status, effective_from,
+                          created_by, approved_by, approved_at)
+VALUES ('01920000-0000-7000-8000-000000000961', '01920000-0000-7000-8000-000000000001', NULL, 'policy.deposit',
+        '{"percent":50,"minimumMinor":2000}', 'Launch policy: half the treatment, at least $20.', 'Active', '2020-01-01T00:00:00Z',
+        '01920000-0000-7000-8000-000000000202', '01920000-0000-7000-8000-000000000207', '2020-01-01T00:00:00Z')
+ON CONFLICT (setting_id) DO NOTHING;
 
 COMMIT;

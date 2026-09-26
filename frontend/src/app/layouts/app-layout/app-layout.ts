@@ -125,6 +125,7 @@ export class AppLayout {
       '/app/devices':        [SCOPES.device],
       '/app/staff':          [SCOPES.workforceRead],
       '/app/reconciliation': [SCOPES.reconcile],
+      '/app/checkout':       [SCOPES.commerce],
       '/app/reports':        [SCOPES.read],
       '/app/guests':         [SCOPES.guestWrite],
       '/app/integrations':   [SCOPES.admin],

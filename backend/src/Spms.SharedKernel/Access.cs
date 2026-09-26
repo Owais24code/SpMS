@@ -62,7 +62,7 @@ public static class RoleScopes
         ["front_desk"] = [SpaScopes.Read, SpaScopes.Write, SpaScopes.GuestWrite, SpaScopes.Device, SpaScopes.Commerce],
         ["scheduler"] = [SpaScopes.Read, SpaScopes.Write, SpaScopes.Schedule],
         ["spa_manager"] = [SpaScopes.Read, SpaScopes.Write, SpaScopes.Schedule, SpaScopes.GuestWrite, SpaScopes.WorkforceRead,
-                           SpaScopes.Messaging, SpaScopes.Device, SpaScopes.Inventory],
+                           SpaScopes.Messaging, SpaScopes.Device, SpaScopes.Inventory, SpaScopes.Commerce],
         ["hr_compliance"] = [SpaScopes.Read, SpaScopes.WorkforceRead],
         ["finance"] = [SpaScopes.Read, SpaScopes.Commerce, SpaScopes.Reconcile],
         ["platform_admin"] = [SpaScopes.Read, SpaScopes.Admin],

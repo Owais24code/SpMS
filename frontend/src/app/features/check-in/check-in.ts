@@ -76,6 +76,7 @@ export class CheckIn implements OnInit {
     if (this.live) {
       // Against the API these are recorded where they happen, not ticked off here.
       if (what === 'room') { void this.router.navigateByUrl('/app/turnover'); return; }
+      if (what === 'deposit') { void this.router.navigateByUrl('/app/checkout'); return; }
       this.toast.info(what === 'forms' ? 'Intake is completed by the guest' : 'Deposits are taken at payment',
         what === 'forms' ? 'Send the intake link, or complete it on the provider tablet.' : 'Take the deposit from the booking’s payment panel.');
       return;

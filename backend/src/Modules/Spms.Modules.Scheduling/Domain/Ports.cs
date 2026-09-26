@@ -83,6 +83,26 @@ public interface ISchedulingEffects
     Task TransitionedAsync(Appointment after, AppointmentStatus from, BufferPolicy buffers, DateTimeOffset nowUtc, CancellationToken ct = default);
 }
 
+/// <summary>
+/// Another module's reaction to an appointment changing state, in the same
+/// transaction — commerce forfeits a deposit on a no-show. Registered by the
+/// modules above scheduling; the scheduling effects call every one.
+/// </summary>
+public interface ISchedulingObserver
+{
+    Task TransitionedAsync(Appointment after, AppointmentStatus from, DateTimeOffset nowUtc, CancellationToken ct = default);
+}
+
+/// <summary>
+/// The desk's deposit readiness for its arrivals: NotRequired, Pending or
+/// Settled. Commerce owns deposits and implements it; without commerce the
+/// answer is NotTracked.
+/// </summary>
+public interface IDepositStatus
+{
+    Task<IReadOnlyDictionary<Guid, string>> ForAppointmentsAsync(IReadOnlyCollection<Guid> appointmentIds, CancellationToken ct = default);
+}
+
 public sealed class NoSchedulingEffects : ISchedulingEffects
 {
     public static readonly NoSchedulingEffects Instance = new();

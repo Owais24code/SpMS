@@ -60,7 +60,7 @@ export const ROLE_PRESETS = {
   spa_manager: {
     login: 'morgan', roleCode: 'spa_manager', name: 'Morgan', property: 'All properties', roleLabel: 'Spa manager',
     scopes: [SCOPES.read, SCOPES.write, SCOPES.schedule, SCOPES.guestWrite,
-             SCOPES.workforceRead, SCOPES.messaging, SCOPES.device, SCOPES.inventory, SCOPES.admin],
+             SCOPES.workforceRead, SCOPES.messaging, SCOPES.device, SCOPES.inventory, SCOPES.commerce, SCOPES.admin],
   },
   front_desk: {
     login: 'dana', roleCode: 'front_desk', name: 'Dana', property: 'Riverside Spa', roleLabel: 'Front desk',

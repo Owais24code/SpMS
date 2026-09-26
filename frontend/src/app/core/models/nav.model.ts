@@ -30,6 +30,7 @@ export const WORKSPACE_NAV: readonly NavGroup[] = [
       { label: 'Schedule',  path: '/app/schedule',  icon: 'M4 5h16v15H4zM4 9h16M9 3v4M15 3v4', badge: 3 },
       { label: 'Check-in',  path: '/app/check-in',  icon: 'M5 12.5 10 17l9-10M4 20h16', badge: 7 },
       { label: 'Treatments',path: '/app/treatments',icon: 'M6 3h12v18H6zM10 18.5h4' },
+      { label: 'Checkout',  path: '/app/checkout',  icon: 'M3 6h18v12H3zM3 10h18M7 15h3' },
     ],
   },
   {

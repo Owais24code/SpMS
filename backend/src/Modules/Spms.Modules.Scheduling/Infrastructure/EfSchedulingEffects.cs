@@ -12,7 +12,7 @@ namespace Spms.Modules.Scheduling.Infrastructure;
 /// the first treatment starting is the visit in progress, and a finished
 /// treatment leaves its room needing a turnover before the next guest.
 /// </summary>
-public sealed class EfSchedulingEffects(SpmsDbContext db, IOutbox outbox) : ISchedulingEffects
+public sealed class EfSchedulingEffects(SpmsDbContext db, IOutbox outbox, IEnumerable<ISchedulingObserver> observers) : ISchedulingEffects
 {
     public async Task TransitionedAsync(Appointment after, AppointmentStatus from, BufferPolicy buffers, DateTimeOffset nowUtc, CancellationToken ct = default)
     {
@@ -60,5 +60,7 @@ public sealed class EfSchedulingEffects(SpmsDbContext db, IOutbox outbox) : ISch
             outbox.Enqueue(new OutboxEvent(EventTypes.TurnaroundChanged, "turnaround_task", task.TurnaroundTaskId, 1,
                 new { turnaroundTaskId = task.TurnaroundTaskId, roomId, appointmentId, status = task.Status, dueUtc = task.DueAt }));
         }
+
+        foreach (var o in observers) await o.TransitionedAsync(after, from, nowUtc, ct);
     }
 }

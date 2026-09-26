@@ -373,7 +373,7 @@ public static class OperationsEndpoints
     /* -------------------------------- arrivals ------------------------------- */
 
     private static async Task<IResult> Arrivals(HttpContext http, SpmsDbContext db, IAppointmentRepository repo, IPropertyDirectory properties,
-        TurnaroundService turnaround, AppointmentAccess access, string? date, CancellationToken ct)
+        TurnaroundService turnaround, AppointmentAccess access, IEnumerable<IDepositStatus> deposits, string? date, CancellationToken ct)
     {
         var ctx = RequestContext.From(http);
         if (Guard.RequireScope(ctx, SpaScopes.Read) is { } denied) return denied;
@@ -400,6 +400,8 @@ public static class OperationsEndpoints
         var intake = (await db.Database.SqlQueryRaw<IntakeStatusRow>(
                 "SELECT appointment_id AS \"AppointmentId\", status AS \"Status\" FROM scheduling.intake_status({0})", ids)
             .ToListAsync(ct)).ToDictionary(x => x.AppointmentId, x => x.Status);
+        var depositSource = deposits.FirstOrDefault();
+        var deposit = depositSource is null ? new Dictionary<Guid, string>() : await depositSource.ForAppointmentsAsync(ids, ct);
 
         var items = rows.Select(a =>
         {
@@ -411,7 +413,7 @@ public static class OperationsEndpoints
                 RoomReady: a.RoomId is null || !notReady.Contains(Guid.Parse(a.RoomId)),
                 Intake: !requires.GetValueOrDefault(id) ? "NotRequired"
                     : status is "Submitted" or "Locked" or "Reviewed" or "Waived" ? "Complete" : "Pending",
-                Deposit: "NotTracked");
+                Deposit: deposit.GetValueOrDefault(id, depositSource is null ? "NotTracked" : "NotRequired"));
         }).ToList();
         return Results.Json(new { date = day.ToString("yyyy-MM-dd"), timeZone = profile.TimeZoneId, items }, Spms.Web.Json.Options);
     }

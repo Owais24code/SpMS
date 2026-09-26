@@ -41,7 +41,11 @@ const workspaceRoutes: Routes = [
   { path: 'inventory',      title: 'Inventory — SpMS',      canActivate: [scopeGuard(SCOPES.inventory)], loadComponent: () => import('./features/inventory/inventory').then((m) => m.Inventory) },
   { path: 'devices',        title: 'Devices — SpMS',        canActivate: [scopeGuard(SCOPES.device)],   loadComponent: () => import('./features/devices/devices').then((m) => m.Devices) },
   { path: 'staff',          title: 'Staff — SpMS',          canActivate: [scopeGuard(SCOPES.workforceRead)],    loadComponent: () => import('./features/staff/staff').then((m) => m.Staff) },
-  { path: 'reconciliation', title: 'Reconciliation — SpMS', canActivate: [scopeGuard(SCOPES.reconcile)],     loadComponent: () => import('./features/reconciliation/reconciliation').then((m) => m.Reconciliation) },
+  { path: 'checkout',       title: 'Checkout — SpMS',       canActivate: [scopeGuard(SCOPES.commerce)],   loadComponent: () => import('./features/checkout/checkout').then((m) => m.Checkout) },
+  { path: 'reconciliation', title: 'Reconciliation — SpMS', canActivate: [scopeGuard(SCOPES.reconcile)],
+    loadComponent: () => environment.useRealApi
+      ? import('./features/reconciliation/reconciliation-live').then((m) => m.ReconciliationLive)
+      : import('./features/reconciliation/reconciliation').then((m) => m.Reconciliation) },
   { path: 'reports',        title: 'Reports — SpMS',        canActivate: [scopeGuard(SCOPES.read)],       loadComponent: () => import('./features/reports/reports').then((m) => m.Reports) },
   { path: 'integrations',   title: 'Integrations — SpMS',   canActivate: [scopeGuard(SCOPES.admin)], loadComponent: () => import('./features/integrations/integrations').then((m) => m.Integrations) },
   { path: 'settings',       title: 'Settings — SpMS',       loadComponent: () => import('./features/settings/settings').then((m) => m.Settings) },

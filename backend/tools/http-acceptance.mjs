@@ -1332,6 +1332,102 @@ await test('intake: the guest submits, the desk sees status only, the assigned p
   if (FGA) eq(403, (await call('GET', `/appointments/${a.json.appointmentId}/notes`, { login: 'marco' })).status, 'an unassigned provider read notes');
 });
 
+/* ------------------------- commerce and payments ------------------------- */
+
+const nyDate = (d = new Date()) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+const idem = () => `sweep-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+
+await test('a deposit follows the policy, replays on its key, and shows settled on the arrivals list', async () => {
+  const a = await book('dep-1', `${today}T19:00:00Z`, { service: SVC.hotstone });
+  const key = idem();
+  const noKey = await call('POST', `/appointments/${a.appointmentId}/deposit`, { login: 'dana', body: { tenderCode: 'Card', paymentMethodToken: 'tok_approve' } });
+  eq(422, noKey.status, 'a deposit without an Idempotency-Key');
+  const dep = await call('POST', `/appointments/${a.appointmentId}/deposit`, { login: 'dana', headers: { 'Idempotency-Key': key }, body: { tenderCode: 'Card', paymentMethodToken: 'tok_approve' } });
+  eq(201, dep.status, dep.text);
+  eq(6750, dep.json.intent.amountMinor, 'half of the 13500 hot stone price');
+  eq('Approved', dep.json.outcome);
+  const again = await call('POST', `/appointments/${a.appointmentId}/deposit`, { login: 'dana', headers: { 'Idempotency-Key': key }, body: { tenderCode: 'Card', paymentMethodToken: 'tok_approve' } });
+  eq(dep.json.intent.paymentIntentId, again.json.intent.paymentIntentId, 'the replay charged again');
+  const arrivals = await call('GET', `/front-desk/arrivals?date=${nyDate(a.startUtc)}`, { login: 'dana' });
+  eq('Settled', arrivals.json.items.find(i => i.appointmentId === a.appointmentId).deposit);
+});
+
+await test('an order is taxed, placed with its deposit applied, and an unknown card outcome answers 202 until resolved', async () => {
+  const a = await book('ord-1', `${today}T19:30:00Z`, { service: SVC.hotstone });
+  await call('POST', `/appointments/${a.appointmentId}/deposit`, { login: 'dana', headers: { 'Idempotency-Key': idem() }, body: { tenderCode: 'Cash' } });
+  const cart = await call('POST', '/orders', { login: 'dana', body: { appointmentIds: [a.appointmentId] } });
+  eq(201, cart.status, cart.text);
+  eq('Draft', cart.json.status);
+  eq(1198, cart.json.taxTotalMinor, '8.875% of 13500');
+  eq(14698, cart.json.totalMinor);
+  eq(422, (await call('POST', `/orders/${cart.json.orderId}/place`, { login: 'dana' })).status, 'place without If-Match');
+  const placed = await call('POST', `/orders/${cart.json.orderId}/place`, { login: 'dana', headers: { 'If-Match': cart.json.eTag } });
+  eq(200, placed.status, placed.text);
+  eq('PartiallyPaid', placed.json.status);
+  ok(/^ORD/.test(placed.json.orderNumber), 'no order number');
+  eq(14698 - 6750, placed.json.balanceMinor);
+
+  const pay = await call('POST', `/orders/${cart.json.orderId}/payments`, { login: 'dana', headers: { 'Idempotency-Key': idem() },
+    body: { tenderCode: 'Card', paymentMethodToken: 'tok_timeout' } });
+  eq(202, pay.status, pay.text);
+  eq('PAYMENT_OUTCOME_AMBIGUOUS', pay.json.code);
+  const intent = pay.json.payment_intent_id;
+  const resolved = await call('POST', `/payment-intents/${intent}/resolve`, { login: 'dana' });
+  eq(201, resolved.status, resolved.text);
+  eq('Approved', resolved.json.outcome);
+  const order = await call('GET', `/orders/${cart.json.orderId}`, { login: 'dana' });
+  eq('Paid', order.json.status);
+  ok(/^RCT/.test(order.json.receiptNumber), 'no receipt number');
+  eq(0, order.json.balanceMinor);
+});
+
+await test('a declined card leaves the order open; the till cannot comp without the manager', async () => {
+  const a = await book('ord-2', `${today}T20:00:00Z`);
+  const cart = await call('POST', '/orders', { login: 'dana', body: { appointmentIds: [a.appointmentId] } });
+  if (FGA) eq(403, (await call('POST', `/orders/${cart.json.orderId}/lines`, { login: 'dana', body: { lineKind: 'Discount', description: 'Comp', unitPriceMinor: 500 } })).status, 'the desk comped');
+  const comp = await call('POST', `/orders/${cart.json.orderId}/lines`, { login: 'morgan', body: { lineKind: 'Discount', description: 'Comp', unitPriceMinor: 500 } });
+  eq(200, comp.status, comp.text);
+  const placed = await call('POST', `/orders/${cart.json.orderId}/place`, { login: 'dana', headers: { 'If-Match': comp.json.eTag } });
+  eq(200, placed.status, placed.text);
+  const declined = await call('POST', `/orders/${cart.json.orderId}/payments`, { login: 'dana', headers: { 'Idempotency-Key': idem() }, body: { tenderCode: 'Card', paymentMethodToken: 'tok_decline' } });
+  eq(200, declined.status, declined.text);
+  eq('Declined', declined.json.outcome);
+  eq('Open', (await call('GET', `/orders/${cart.json.orderId}`, { login: 'dana' })).json.status);
+  const cash = await call('POST', `/orders/${cart.json.orderId}/payments`, { login: 'dana', headers: { 'Idempotency-Key': idem() }, body: { tenderCode: 'Cash' } });
+  eq(201, cash.status, cash.text);
+});
+
+await test('a refund is requested at the desk, refused to its requester, and approved by finance', async () => {
+  const a = await book('ref-1', `${today}T20:30:00Z`);
+  const cart = await call('POST', '/orders', { login: 'dana', body: { appointmentIds: [a.appointmentId] } });
+  await call('POST', `/orders/${cart.json.orderId}/place`, { login: 'dana', headers: { 'If-Match': cart.json.eTag } });
+  const paid = await call('POST', `/orders/${cart.json.orderId}/payments`, { login: 'dana', headers: { 'Idempotency-Key': idem() }, body: { tenderCode: 'Card', paymentMethodToken: 'tok_approve' } });
+  eq(201, paid.status, paid.text);
+  const sale = paid.json.transaction.paymentTransactionId;
+  eq(422, (await call('POST', `/payment-transactions/${sale}/refunds`, { login: 'dana', body: { amountMinor: 99999999, reasonCode: 'ServiceIssue' } })).status);
+  const req = await call('POST', `/payment-transactions/${sale}/refunds`, { login: 'dana', body: { amountMinor: 1000, reasonCode: 'ServiceIssue' } });
+  eq(201, req.status, req.text);
+  eq('Requested', req.json.intent.status);
+  const self = await call('POST', `/payment-intents/${req.json.intent.paymentIntentId}/approve`, { login: 'dana', headers: { 'If-Match': req.json.intent.eTag } });
+  eq(403, self.status, 'the requester approved their own refund');
+  const approved = await call('POST', `/payment-intents/${req.json.intent.paymentIntentId}/approve`, { login: 'sam', headers: { 'If-Match': req.json.intent.eTag } });
+  eq(200, approved.status, approved.text);
+  eq('Succeeded', approved.json.intent.status);
+  const order = await call('GET', `/orders/${cart.json.orderId}`, { login: 'dana' });
+  eq('PartiallyRefunded', order.json.status);
+  eq(1000, order.json.refundedMinor);
+});
+
+await test('reconciliation is finance\'s: the day totals by tender, and the desk is refused', async () => {
+  eq(403, (await call('GET', `/reconciliation?date=${nyDate()}`, { login: 'dana' })).status);
+  const r = await call('GET', `/reconciliation?date=${nyDate()}`, { login: 'sam' });
+  eq(200, r.status, r.text);
+  ok(Array.isArray(r.json.totals) && r.json.totals.some(t => t.tenderCode === 'Card'), 'no card total');
+  eq(0, r.json.ambiguous.length, 'an ambiguous payment was left');
+  const sweep = await call('POST', '/reconciliation/resolve-ambiguous', { login: 'sam' });
+  eq(200, sweep.status, sweep.text);
+});
+
 /* ------------------------------ summary ------------------------------ */
 
 console.log();

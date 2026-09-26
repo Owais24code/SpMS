@@ -20,6 +20,12 @@ export const API_PROBLEM_CODES = [
   'SOFT_CONFLICT_APPROVAL_REQUIRED',
   'PREFLIGHT_EXPIRED',
   'IDEMPOTENCY_MISMATCH',
+  'OWNERSHIP_AMBIGUOUS',
+  'DEPENDENCY_TIMEOUT',
+  /** A 202: the provider has not confirmed. Query the intent; never pay again. */
+  'PAYMENT_OUTCOME_AMBIGUOUS',
+  'RATE_LIMITED',
+  'OFFLINE_ACTION_BLOCKED',
   'INTERNAL_ERROR',
   /** Not from the catalogue: the request never reached a server. */
   'NETWORK_UNREACHABLE',
