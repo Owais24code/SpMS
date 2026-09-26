@@ -37,7 +37,15 @@ const workspaceRoutes: Routes = [
   { path: 'forbidden',      title: 'No access — SpMS',      loadComponent: () => import('./features/auth/forbidden/forbidden').then((m) => m.Forbidden) },
 ];
 
+/** The guest web: magic-link sessions, never the staff workspace's identity. */
+const guestRoutes: Routes = [
+  { path: 'g/:token',     title: 'Signing in — AARFID SpMS', loadComponent: () => import('./features/guest/guest-landing').then((m) => m.GuestLanding) },
+  { path: 'guest/sign-in', title: 'Manage your visit — AARFID SpMS', loadComponent: () => import('./features/guest/guest-sign-in').then((m) => m.GuestSignIn) },
+  { path: 'guest',        title: 'Your visit — AARFID SpMS', loadComponent: () => import('./features/guest/guest-portal').then((m) => m.GuestPortal) },
+];
+
 export const routes: Routes = [
+  ...guestRoutes,
   {
     path: 'sign-in',
     title: 'Sign in — AARFID SpMS',

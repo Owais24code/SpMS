@@ -1,4 +1,4 @@
-import { Injectable, computed, inject, signal } from '@angular/core';
+import { Injectable, computed, effect, inject, signal, untracked } from '@angular/core';
 import type {
   Appointment, ArrivalRow, DeviceRow, LaneSlot, LedgerRow,
   MessageRule, OwnerRow, SlotState, StaffRow, StockLine, Lane,
@@ -123,7 +123,23 @@ export class WorkspaceStore {
     // Gated on a principal existing: every scoped endpoint answers 403 with no
     // scopes, and a read fired from the sign-in screen would leave a stale
     // authorization failure on the board for the session that follows.
-    if (this.realApi && inject(AuthService).isSignedIn()) void this.loadBoard();
+    //
+    // Keyed on who and where: signing in as someone else, or switching
+    // property, reloads the board and the catalogue for the new scope.
+    const auth = inject(AuthService);
+    const scopeKey = computed(() => {
+      const u = auth.user();
+      return u ? `${u.principalId}|${u.propertyId ?? ''}|${u.scopes.join(' ')}` : null;
+    });
+    effect(() => {
+      const key = scopeKey();
+      if (!this.realApi || key === null) return;
+      untracked(() => {
+        this.services.set([]);
+        this.boardRows.set([]);
+        void this.loadBoard();
+      });
+    });
   }
 
   // ---- chart ranges -----------------------------------------------------

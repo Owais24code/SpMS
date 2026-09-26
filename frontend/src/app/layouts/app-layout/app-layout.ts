@@ -100,6 +100,15 @@ export class AppLayout {
     this.router.navigateByUrl('/sign-in');
   }
 
+  protected async switchProperty(propertyId: string, name: string): Promise<void> {
+    this.accountOpen.set(false);
+    if (await this.auth.switchProperty(propertyId)) {
+      this.toast.success('Property switched', `The workspace now shows ${name}.`);
+    } else if (this.auth.error()) {
+      this.toast.error('Could not switch property', this.auth.error() ?? '');
+    }
+  }
+
   protected resetDemo(): void {
     this.store.reset();
     this.accountOpen.set(false);

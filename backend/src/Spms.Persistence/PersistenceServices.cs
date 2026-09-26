@@ -44,3 +44,19 @@ public static class PersistenceServices
         return services;
     }
 }
+
+public static class ScopeExtensions
+{
+    /// <summary>
+    /// Re-applies core.begin_scope inside the current transaction after the
+    /// execution scope changed — for the few anonymous entry points (magic-link
+    /// redemption, guest self-service) that learn their tenant mid-request.
+    /// </summary>
+    public static async Task ApplyScopeAsync(this SpmsDbContext db, CancellationToken ct = default)
+    {
+        var tx = db.Database.CurrentTransaction
+                 ?? throw new InvalidOperationException("ApplyScopeAsync needs the request transaction.");
+        await ScopeSql.ApplyAsync(db.Database.GetDbConnection(), Microsoft.EntityFrameworkCore.Storage.DbContextTransactionExtensions.GetDbTransaction(tx),
+            db.Scope, null, ct);
+    }
+}

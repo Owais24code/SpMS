@@ -30,10 +30,19 @@ SpMS/
 | Authorization tests | `fga model test --tests authorization/model.fga.yaml` |
 | Authorization live smoke | `OPENFGA_DATASTORE_URI=postgres://…/openfga authorization/smoke.sh` |
 | Front end | `cd frontend && npm install && npm start` (http://localhost:4200) |
-| Front-end checks | `npm run build` · `npm run audit:contrast` |
+| Front-end checks | `npm run build` · `npm test` (vitest) · `npm run audit:contrast` |
+| Front-end e2e | `npm run e2e` (Playwright; needs the dev API on :5199, starts `ng serve` itself) |
 | Backend | `cd backend && dotnet build Spms.sln -c Release && dotnet test` |
-| API (dev) | `ASPNETCORE_ENVIRONMENT=Development dotnet run --project src/Spms.Api` |
-| HTTP contract sweep | `node backend/tools/http-acceptance.mjs http://127.0.0.1:5199` (fresh instance only) |
+| API (dev) | `ASPNETCORE_ENVIRONMENT=Development dotnet run --project src/Spms.Host` (migrates, seeds `database/seed/dev.sql`) |
+| API with real OpenFGA | add `Authorization__OpenFga__ApiUrl=http://127.0.0.1:8080` (bootstraps the store and model in Development) |
+| HTTP contract sweep | `node backend/tools/http-acceptance.mjs http://127.0.0.1:5199` (fresh instance only; `SPMS_SWEEP_FGA=1` with OpenFGA) |
+| OpenFGA model JSON | `fga model transform --file authorization/model.fga > authorization/model.json` (CI checks it) |
+
+**Dev logins.** In Development the API accepts `X-Spa-Login: <handle>` and resolves it through
+the same principal resolver an Entra token uses: roles, properties and scopes come from the
+database. The seeded handles are `dana` (front desk, Riverside), `morgan` (spa manager and
+platform admin, both properties), `riley` (scheduler), `lena` (provider), `sam` (finance) and
+`ada` (platform admin). The sign-in screen offers them in `demo` mode.
 
 On Windows, install npm dependencies from a local path, not a mounted or network share,
 because npm's atomic renames fail on some mounts. Backend Postgres tests **skip silently**
@@ -77,11 +86,13 @@ core ── reporting
 | messaging | 2 | versioned templates with reminder timing, scheduled messages with delivery state |
 | reporting | 1 | saved report runs |
 
-**Backend layout.** Today it is still layer-per-project (`Spms.Domain`, `Spms.Infrastructure`,
-`Spms.Infrastructure.Postgres`, `Spms.Api`). The next step is a `Spms.Host` composition root,
-a `Spms.SharedKernel`, and one project per module. There will be **one EF Core `DbContext`
-across all schemas**, with each module contributing its `IEntityTypeConfiguration`s. That
-split waits on a .NET toolchain; see Status.
+**Backend layout.** `Spms.Host` is the composition root; `Spms.SharedKernel` holds the ports
+(unit of work, audit, outbox, idempotency, access decisions, field protection); `Spms.Persistence`
+owns the single `SpmsDbContext`, the tenancy interceptors and the migrations; `Spms.Web` the
+request context, guards and problem+json. Each module is its own project
+(`backend/src/Modules/Spms.Modules.<Name>`) and contributes its EF model through
+`IModelContributor`. The row classes are generated from `database/model/*.py` by
+`database/tools/generate_ef.py`, the same source the SQL comes from; CI fails if either is stale.
 
 ### Tenancy: three layers
 
@@ -231,6 +242,32 @@ to `core.audit_event.authorization_decision` with the model id.
 real OpenFGA v1.10.2 on PostgreSQL, with stored roles, contextual tuples and a conditional
 delegation, and passes 6/6.
 
+**In this build:**
+
+- `/me` returns the resolved principal, roles, effective scopes and the operator's properties.
+  Effective scopes are the role scopes narrowed by any `spa.*` scopes in the token.
+- `X-Spa-Property` picks the current property among those the principal holds; anything else is
+  refused.
+- Guests: staff add a verified contact point and issue a link
+  (`POST /guests/{id}/magic-links`); a guest can also ask by email
+  (`POST /guest/magic-links/request`, the same 202 whether or not the address is known).
+  `POST /guest/sessions` redeems the link for a 30-minute guest session (`spa.guest.self`).
+- Tuples are written from outbox events (role assignments, property registration, guest
+  ownership, delegation, devices) and reconciled on start in Development.
+- Without `OpenFga:ApiUrl` in Development, relationship checks are permissive and say so in
+  the log. Everywhere else a missing or unreachable OpenFGA is a 503.
+
+**Front-end sign-in** (`assets/config.js` → `authMode`):
+
+| Mode | How | Where |
+|---|---|---|
+| `entra` | MSAL, authorization code + PKCE, full-page redirect; bearer token to the API | Production. Set `entra: { clientId, authority, apiScopes }` |
+| `demo` | Pick a seeded dev login; the client sends `X-Spa-Login` | API in Development only |
+| `offline` | Role presets, no API (`useRealApi: false`) | Screen demos |
+
+The guest web lives at `/g/:token` (redeems the link, then drops it from the URL),
+`/guest/sign-in` and `/guest`.
+
 **Hosting:** `infra/openfga.bicep` provides Azure Container Apps with internal ingress only,
 a preshared key from Key Vault through managed identity, a migration job, and at least one
 replica. The datastore is a separate `openfga` database on the application's PostgreSQL
@@ -302,21 +339,22 @@ alternative, but it is a different resource.
 
 ## Status
 
-| Area | State |
-|---|---|
-| R1 schema design (61 tables, refactored from 123) | Done; verified on PostgreSQL 16 |
-| RLS, roles, scope functions | Done; verified |
-| OpenFGA model, tests, hosting template | Done; verified (model tests, live smoke, bicep build) |
-| Repository layout (`backend/`, `frontend/`) | Done |
-| Backend scheduling slice (10 endpoints) | Working on its **own** V001–V003 schema (text ids, `public`) |
-| Backend → modular monolith + EF Core on the new schema | **Not started: blocked on toolchain** |
-| `IAccessDecider` port, OpenFGA adapter, endpoint filters, magic-link endpoints | **Not started: blocked on toolchain** |
-| EF `HasQueryFilter`, scope interceptor, drift check | **Not started: blocked on toolchain** |
+Work is delivered in eight batches. Each is one commit on `main`.
 
-**Toolchain blocker:** the build environment's network policy blocks the .NET SDK and
-NuGet (dot.net, builds.dotnet.microsoft.com, api.nuget.org), so no C# could be compiled or
-tested. The C# work waits until those hosts are allowlisted or the SDK is installed on a
-machine that can build. It is deliberately not written blind.
+| # | Batch | State |
+|---|---|---|
+| 1 | Backend foundation: EF Core on the 61-table R1 schema, three-layer tenancy, module split | Done |
+| 2 | Identity and authorization: Entra JWT, principal resolution, OpenFGA checks and tuple sync, guest magic links; MSAL / dev-login sign-in, property switcher, guest landing | Done |
+| 3 | Scheduling completion: CON-005 tenant-wide, CON-006 undo, CON-007 bulk move, holds, visits, waitlist, turnaround | Planned |
+| 4 | Guests and intake: profiles, merge, delegation, consent, privacy; intake with envelope encryption | Planned |
+| 5 | Commerce and payments: orders, deposits, refunds with dual approval, provider-agnostic port | Planned |
+| 6 | Catalogue, resources, workforce, inventory CRUD and settings approval | Planned |
+| 7 | Messaging, reporting, devices, integrations, Marquee mode | Planned |
+| 8 | Operating mode, search, live board, partition/retention jobs, API + PostgreSQL bicep, observability | Planned |
+
+**Verified (batch 2):** backend 186/186 tests against PostgreSQL 16 and OpenFGA 1.10.2; HTTP
+sweep 85/85 in permissive and real-FGA modes; web unit tests (vitest) and Playwright e2e
+(sign-in, reload, property switch, guest magic link single use) green.
 
 **Open decisions (not ours to close):**
 

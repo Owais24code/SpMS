@@ -189,9 +189,24 @@
         @if (accountOpen()) {
           <div class="menu" role="menu" [appFocusTrap]="true">
             <p class="menu__head">{{ auth.user()?.property }}</p>
+            @if ((auth.user()?.properties?.length ?? 0) > 1) {
+              <p class="menu__label">Switch property</p>
+              @for (p of auth.user()!.properties; track p.propertyId) {
+                <button
+                  type="button" class="menu__item" role="menuitemradio"
+                  [attr.aria-checked]="p.propertyId === auth.user()?.propertyId"
+                  [class.is-current]="p.propertyId === auth.user()?.propertyId"
+                  [disabled]="auth.busy()"
+                  (click)="switchProperty(p.propertyId, p.name)"
+                >{{ p.name }}</button>
+              }
+              <hr class="menu__rule" />
+            }
             <a class="menu__item" routerLink="/app/settings" role="menuitem" (click)="accountOpen.set(false)">Settings</a>
             <button type="button" class="menu__item" role="menuitem" (click)="resetDemo()">Reset demo data</button>
-            <a class="menu__item" routerLink="/sign-in" role="menuitem" (click)="accountOpen.set(false)">Switch role</a>
+            @if (auth.mode !== 'entra') {
+              <a class="menu__item" routerLink="/sign-in" role="menuitem" (click)="accountOpen.set(false)">Switch role</a>
+            }
             <hr class="menu__rule" />
             <button type="button" class="menu__item menu__item--danger" role="menuitem" (click)="signOut()">Sign out</button>
           </div>

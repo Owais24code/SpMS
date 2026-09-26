@@ -13,12 +13,16 @@
 #             SQL), row-level security through SET LOCAL ROLE spms_app, the EF
 #             model/schema drift check, the GiST exclusion constraint and the unit
 #             of work - then the HTTP acceptance sweep against a freshly started host.
-#   web       the Angular production build and the contrast audit.
+#   web       the Angular production build, the vitest unit suite and the contrast audit.
 #   database  the R1 reference schema and the generated EF model both regenerated
 #             (each must match what is committed),
 #             built on postgres:16 and its SQL tests run: RLS, CON-002, append-only,
 #             identity resolution, integrity.
-#   authz     the OpenFGA model validated and its tests run.
+#   authz     the OpenFGA model validated and its tests run, and the JSON form the
+#             API loads (authorization/model.json) checked against model.fga.
+#   e2e       the Angular app driven in Chromium against a real API, PostgreSQL
+#             and OpenFGA: dev-login sign-in, property switching, the guest
+#             magic link.
 #   bicep     every deployment template compiled, so a broken template is caught
 #             here rather than half way through a deploy.
 #
@@ -71,6 +75,10 @@ jobs:
       # suite. In CI that silence would be indistinguishable from a pass, which
       # is exactly the failure this job exists to prevent.
       SPMS_TEST_CONNECTION: 'Host=127.0.0.1;Port=5432;Database=postgres;Username=postgres;Password=spms'
+      # The relationship checks run for real: the OpenFGA cases in the suite
+      # and the sweep's refusal assertions both need a live server.
+      SPMS_TEST_OPENFGA: 'http://127.0.0.1:8080'
+      SPMS_SWEEP_FGA: '1'
 
     steps:
       - uses: actions/checkout@v4
@@ -78,6 +86,14 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+
+      # A service container cannot be given `run`, so OpenFGA is started here.
+      # In-memory storage: the API bootstraps the store and model on start.
+      - name: Start OpenFGA
+        run: |
+          docker run -d --name openfga -p 8080:8080 openfga/openfga:v1.10.2 run
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && exit 0; sleep 1; done
+          docker logs openfga; exit 1
 
       # Offline by construction: NuGet.config clears the public sources and
       # points at the vendored feed. --no-restore on the build below then proves
@@ -107,7 +123,10 @@ jobs:
         env:
           ASPNETCORE_ENVIRONMENT: Development
           ASPNETCORE_URLS: http://127.0.0.1:5199
-          SPMS_CONNECTION: 'Host=127.0.0.1;Port=5432;Database=spms_http;Username=postgres;Password=spms'
+          # ConnectionStrings__Spms, not SPMS_CONNECTION: appsettings.Development.json
+          # sets ConnectionStrings:Spms, and configuration wins over the fallback.
+          ConnectionStrings__Spms: 'Host=127.0.0.1;Port=5432;Database=spms_http;Username=postgres;Password=spms'
+          Authorization__OpenFga__ApiUrl: http://127.0.0.1:8080
         run: |
           PGPASSWORD=spms createdb -h 127.0.0.1 -U postgres spms_http
           nohup dotnet run --project src/Spms.Host -c Release --no-build > "$RUNNER_TEMP/api.log" 2>&1 &
@@ -169,6 +188,10 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npx ng build --configuration production
+
+      - name: Unit tests
+        working-directory: frontend
+        run: npm test
 
       # The accessibility requirement is a measured contrast ratio, not a
       # promise in a document. This is the measurement.
@@ -237,3 +260,78 @@ jobs:
         run: |
           ./fga model validate --file authorization/model.fga
           ./fga model test --tests authorization/model.fga.yaml
+      # The API loads model.json (embedded at build time). A model.fga edit
+      # without regenerating it would test one model and deploy another.
+      - name: model.json matches model.fga
+        run: |
+          ./fga model transform --file authorization/model.fga | jq -S . > /tmp/expected.json
+          jq -S . authorization/model.json > /tmp/committed.json
+          diff -u /tmp/expected.json /tmp/committed.json || {
+            echo "::error::authorization/model.json is stale. Run: fga model transform --file authorization/model.fga > authorization/model.json"
+            exit 1
+          }
+
+  e2e:
+    name: E2E - web against the real API
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: spms
+          POSTGRES_DB: spms_e2e
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.2'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Start OpenFGA
+        run: |
+          docker run -d --name openfga -p 8080:8080 openfga/openfga:v1.10.2 run
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && exit 0; sleep 1; done
+          docker logs openfga; exit 1
+      - name: Build the API
+        working-directory: backend
+        run: dotnet build src/Spms.Host -c Release
+      - name: Start the API
+        working-directory: backend
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          ASPNETCORE_URLS: http://127.0.0.1:5199
+          ConnectionStrings__Spms: 'Host=127.0.0.1;Port=5432;Database=spms_e2e;Username=postgres;Password=spms'
+          Authorization__OpenFga__ApiUrl: http://127.0.0.1:8080
+        run: |
+          nohup dotnet run --project src/Spms.Host -c Release --no-build > "$RUNNER_TEMP/api.log" 2>&1 &
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:5199/health/ready >/dev/null 2>&1 && exit 0; sleep 1; done
+          cat "$RUNNER_TEMP/api.log"; exit 1
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Playwright
+        working-directory: frontend
+        env:
+          CI: '1'
+        run: npm run e2e
+      - name: Artifacts
+        if: always()
+        run: cat "$RUNNER_TEMP/api.log" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-report
+          path: frontend/playwright-report
+          if-no-files-found: ignore

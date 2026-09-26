@@ -20,7 +20,7 @@ namespace Spms.Persistence.Migrations
     {
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            foreach (var (_, sql) in SchemaScripts.Baseline())
+            foreach (var (_, sql) in SchemaScripts.ForMigration("R1Baseline"))
                 migrationBuilder.Sql(sql);
         }
 

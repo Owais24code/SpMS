@@ -27,13 +27,16 @@ public static class AppointmentEndpoints
     /* ------------------------------- read one ------------------------------ */
 
     private static async Task<IResult> GetOne(
-        HttpContext http, IAppointmentRepository repo, string id, CancellationToken ct)
+        HttpContext http, IAppointmentRepository repo, AppointmentAccess access, string id, CancellationToken ct)
     {
         var ctx = RequestContext.From(http);
         if (Guard.RequireScope(ctx, SpaScopes.Read) is { } denied) return denied;
 
+        // Found first, then authorised: a record the caller's scope cannot see
+        // is 404 whether or not they would have been allowed to read it.
         var a = await repo.GetAsync(ctx.Tenant(), ctx.Property(), id, ct);
         if (a is null) return Problem.From(ApiError.NotFound, ctx.CorrelationId);
+        if (await access.AppointmentAsync(ctx, a, "can_read", ct) is { } refused) return refused;
 
         var dto = AppointmentDto.From(a);
         // The ETag is how the client obtains the version it must send back.
@@ -44,11 +47,12 @@ public static class AppointmentEndpoints
     /* -------------------------------- list --------------------------------- */
 
     private static async Task<IResult> List(
-        HttpContext http, IAppointmentRepository repo, IPropertyDirectory properties,
+        HttpContext http, IAppointmentRepository repo, IPropertyDirectory properties, AppointmentAccess access,
         string? date, string? from, string? to, int? offset, int? limit, CancellationToken ct)
     {
         var ctx = RequestContext.From(http);
         if (Guard.RequireScope(ctx, SpaScopes.Read) is { } denied) return denied;
+        if (await access.PropertyAsync(ctx, "can_view_board", ct) is { } refused) return refused;
 
         DateTimeOffset windowFrom, windowTo;
 
@@ -114,11 +118,12 @@ public static class AppointmentEndpoints
 
     private static async Task<IResult> Create(
         HttpContext http, IAppointmentRepository repo, IIdempotencyStore idem,
-        SchedulingService scheduling, IServiceCatalog services, IClock clock,
+        SchedulingService scheduling, IServiceCatalog services, IClock clock, AppointmentAccess access,
         ILoggerFactory loggers, CancellationToken ct)
     {
         var ctx = RequestContext.From(http);
         if (Guard.RequireScope(ctx, SpaScopes.Write) is { } denied) return denied;
+        if (await access.PropertyAsync(ctx, "can_book", ct) is { } refused) return refused;
 
         var (body, readFailure) = await Guard.ReadBodyAsync(http, ctx, ct);
         if (body is null) return readFailure!;
@@ -127,12 +132,12 @@ public static class AppointmentEndpoints
 
         return await Idempotency.RunAsync(
             http, idem, ctx, logger, "appointments.create", body, clock.UtcNow,
-            () => CreateCore(http, repo, scheduling, services, ctx, body, ct), ct);
+            () => CreateCore(http, repo, scheduling, services, access, ctx, body, ct), ct);
     }
 
     private static async Task<Idempotency.Outcome> CreateCore(
         HttpContext http, IAppointmentRepository repo, SchedulingService scheduling,
-        IServiceCatalog services, RequestContext ctx, string body, CancellationToken ct)
+        IServiceCatalog services, AppointmentAccess access, RequestContext ctx, string body, CancellationToken ct)
     {
         if (!Guard.TryParse<CreateAppointmentRequest>(body, ctx, out var req, out var parseFailure))
             return Idempotency.Refused(parseFailure!);
@@ -192,6 +197,12 @@ public static class AppointmentEndpoints
         // transaction. It previously did neither, so a booking a reassign
         // would have refused could be typed straight into the board, and two
         // concurrent creates into one room both succeeded.
+        // A reason is an override of a soft conflict, which is its own right
+        // (spa_manager): the front desk can book, but not talk past a conflict.
+        if (!string.IsNullOrWhiteSpace(req.Reason)
+            && await access.PropertyAsync(ctx, "can_override_soft_conflict", ct) is { } noOverride)
+            return Idempotency.Refused(noOverride);
+
         var result = await scheduling.CreateAsync(
             ctx.Tenant(), ctx.Property(), booking, req.Reason, ct);
 
@@ -268,7 +279,8 @@ public static class AppointmentEndpoints
     /* ------------------------------ transitions ---------------------------- */
 
     private static async Task<IResult> Transition(
-        HttpContext http, SchedulingService scheduling, string id, CancellationToken ct)
+        HttpContext http, SchedulingService scheduling, IAppointmentRepository repo, AppointmentAccess access,
+        string id, CancellationToken ct)
     {
         var ctx = RequestContext.From(http);
         if (Guard.RequireScope(ctx, SpaScopes.Write) is { } denied) return denied;
@@ -306,6 +318,11 @@ public static class AppointmentEndpoints
                 "If-Match must carry the ETag you read, such as \"3\". A wildcard is not accepted on this operation.",
                 extensions: Problem.Ext("field_violations",
                     new[] { new { field = "If-Match", rule = "explicit_etag_required" } }));
+
+        var current = await repo.GetAsync(ctx.Tenant(), ctx.Property(), id, ct);
+        if (current is null) return Problem.From(ApiError.NotFound, ctx.CorrelationId);
+        if (await access.AppointmentAsync(ctx, current, to == AppointmentStatus.Cancelled ? "can_cancel" : "can_transition", ct, strong: true)
+            is { } refused) return refused;
 
         var result = await scheduling.TransitionAsync(
             ctx.Tenant(), ctx.Property(), id, to, assertedVersion,

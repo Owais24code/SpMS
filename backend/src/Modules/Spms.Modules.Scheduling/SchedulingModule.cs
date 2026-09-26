@@ -23,6 +23,7 @@ public static class SchedulingModule
         services.AddScoped<IGuestDirectory, EfGuestDirectory>();
         services.AddScoped<IResourceCalendar, EfResourceCalendar>();
         services.AddScoped<SchedulingService>();
+        services.AddScoped<AppointmentAccess>();
         return services;
     }
 

@@ -10,10 +10,10 @@ namespace Spms.Tests.Postgres;
 public class SchemaTests(PostgresFixture fixture) : IClassFixture<PostgresFixture>
 {
     [RequiresPostgres]
-    public void The_baseline_is_the_one_migration_applied()
+    public void The_baseline_is_applied_first_and_every_migration_after_it()
     {
-        Assert.Single(fixture.AppliedMigrations);
         Assert.EndsWith("_R1Baseline", fixture.AppliedMigrations[0], StringComparison.Ordinal);
+        Assert.Contains(fixture.AppliedMigrations, m => m.EndsWith("_IdentityLookups", StringComparison.Ordinal));
     }
 
     [RequiresPostgres]

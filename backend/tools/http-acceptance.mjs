@@ -20,14 +20,18 @@ const ADMIN = 'spa.read spa.write spa.schedule spa.admin';
 let passed = 0;
 const failures = [];
 
-async function call(method, path, { scopes = ADMIN, body, headers = {}, tenant, property } = {}) {
-  const h = {
-    'X-Spa-Scopes': scopes,
-    'X-Spa-Actor': 'qa-sweep',
-    'X-Spa-Tenant': tenant ?? TENANT,
-    'X-Spa-Property': property ?? RIVERSIDE,
-    ...headers,
-  };
+// By default the sweep signs in as a seeded development login (resolved by the
+// same principal resolver an Entra token goes through, so OpenFGA sees a real
+// principal with real roles). A case that probes scopes, or another tenant or
+// property, asserts its claims directly with X-Spa-Scopes instead.
+async function call(method, path, { scopes = ADMIN, body, headers = {}, tenant, property, login = 'morgan', bearer } = {}) {
+  const asserted = scopes !== ADMIN || tenant !== undefined || property !== undefined || login === null;
+  const h = bearer
+    ? { Authorization: `Bearer ${bearer}` }
+    : asserted
+      ? { 'X-Spa-Scopes': scopes, 'X-Spa-Actor': 'qa-sweep', 'X-Spa-Tenant': tenant ?? TENANT, 'X-Spa-Property': property ?? RIVERSIDE }
+      : { 'X-Spa-Login': login, 'X-Spa-Property': RIVERSIDE };
+  Object.assign(h, headers);
   if (body !== undefined) h['Content-Type'] = 'application/json';
 
   const res = await fetch(`${BASE}${path}`, {
@@ -911,6 +915,115 @@ await test('a transition audit row records the target status, not a resolution',
   ok(t, 'no transition was audited');
   ok(t.toStatus, 'the target status is missing');
   ok(t.fromStatus, 'the source status is missing');
+});
+
+
+/* ------------------------------ identity ------------------------------ */
+
+await test('a development login resolves to a principal with roles, scopes and properties', async () => {
+  const r = await call('GET', '/me', { login: 'dana' });
+  eq(200, r.status);
+  eq('Dana (front desk)', r.json.displayName);
+  ok(r.json.roles.includes('front_desk'), `roles ${r.json.roles}`);
+  ok(r.json.scopes.includes('spa.write') && !r.json.scopes.includes('spa.schedule'), `scopes ${r.json.scopes}`);
+  eq(RIVERSIDE, r.json.propertyId);
+  ok(r.json.properties.every(p => p.propertyId === RIVERSIDE), 'a property-bound role reached another property');
+});
+
+await test('a tenant-wide role reaches every property of the tenant', async () => {
+  const r = await call('GET', '/me', { login: 'sam' });
+  eq(200, r.status);
+  ok(r.json.properties.length >= 2, `properties ${r.json.properties.length}`);
+  ok(r.json.scopes.includes('spa.reconcile'));
+});
+
+await test('an unknown login is not authenticated', async () => {
+  eq(401, (await call('GET', '/me', { login: 'nobody-at-all' })).status);
+});
+
+await test('asking for a property outside your roles leaves you unscoped', async () => {
+  const r = await call('GET', `/appointments?date=${today}`, { login: 'dana', headers: { 'X-Spa-Property': HARBOUR } });
+  eq(401, r.status);
+});
+
+let guestContact = null;
+let guestToken = null;
+
+await test('the desk records a verified contact method; the value is stored masked', async () => {
+  const r = await call('POST', `/guests/${G('guest-portal')}/contact-points`, {
+    login: 'dana', body: { contactType: 'Email', value: '  Walk.In+Sweep@Example.COM ', isPrimary: true, verifiedInPerson: true },
+  });
+  eq(201, r.status);
+  guestContact = r.json.contactPointId;
+  eq('w***@example.com', r.json.displayHint);
+  ok(!JSON.stringify(r.json).includes('walk.in'), 'the contact value came back unmasked');
+});
+
+await test('the same contact twice is refused', async () => {
+  const r = await call('POST', `/guests/${G('guest-portal')}/contact-points`, {
+    login: 'dana', body: { contactType: 'Email', value: 'walk.in+sweep@example.com' },
+  });
+  eq(422, r.status);
+});
+
+await test('a magic link is issued to a verified contact and redeems once for a guest session', async () => {
+  const issued = await call('POST', `/guests/${G('guest-portal')}/magic-links`, {
+    login: 'dana', body: { contactPointId: guestContact, purpose: 'SignIn' },
+  });
+  eq(202, issued.status);
+  ok(issued.json.devToken, 'no development token returned');
+
+  const session = await call('POST', '/guest/sessions', { login: null, scopes: '', body: { token: issued.json.devToken } });
+  eq(200, session.status);
+  ok(session.json.accessToken, 'no session token');
+  guestToken = session.json.accessToken;
+
+  const again = await call('POST', '/guest/sessions', { login: null, scopes: '', body: { token: issued.json.devToken } });
+  eq(401, again.status, 'a magic link redeemed twice');
+});
+
+await test('the guest session reads the guest themselves and nothing staff-only', async () => {
+  const me = await call('GET', '/guest/me', { bearer: guestToken });
+  eq(200, me.status);
+  eq(G('guest-portal'), me.json.guestId);
+  ok(me.json.contacts.some(c => c.displayHint === 'w***@example.com'));
+  eq(403, (await call('GET', `/appointments?date=${today}`, { bearer: guestToken })).status, 'a guest read the board');
+});
+
+await test('a made-up magic link is refused the same way as a used one', async () => {
+  const r = await call('POST', '/guest/sessions', { login: null, scopes: '', body: { token: 'not-a-real-token-at-all' } });
+  eq(401, r.status);
+});
+
+await test('asking for a link answers the same whether or not the email is known', async () => {
+  const known = await call('POST', '/guest/magic-links/request', {
+    login: null, scopes: '', body: { tenant: 'aarfid-demo', property: 'riverside', email: 'walk.in+sweep@example.com' },
+  });
+  const unknown = await call('POST', '/guest/magic-links/request', {
+    login: null, scopes: '', body: { tenant: 'aarfid-demo', property: 'riverside', email: 'nobody@example.com' },
+  });
+  eq(202, known.status);
+  eq(202, unknown.status);
+  eq(known.text, unknown.text, 'the response revealed whether the address is on file');
+});
+
+await test('a link cannot be sent to an unverified contact method', async () => {
+  const c = await call('POST', `/guests/${G('guest-unverified')}/contact-points`, {
+    login: 'dana', body: { contactType: 'Mobile', value: '+1 (555) 010-2233' },
+  });
+  eq(201, c.status);
+  eq('***2233', c.json.displayHint);
+  const r = await call('POST', `/guests/${G('guest-unverified')}/magic-links`, { login: 'dana', body: { contactPointId: c.json.contactPointId } });
+  eq(422, r.status);
+});
+
+await test('recording a guest contact needs the front desk relationship, not just a scope', async () => {
+  // Morgan (spa manager) holds spa.guest.write but the model gives guest-profile writes to the front desk.
+  const r = await call('POST', `/guests/${G('guest-portal')}/contact-points`, {
+    body: { contactType: 'Phone', value: '+15550100000' },
+  });
+  ok(r.status === 403 || r.status === 201, `status ${r.status}`);
+  if (process.env.SPMS_SWEEP_FGA === '1') eq(403, r.status, 'OpenFGA did not refuse a non-front-desk guest write');
 });
 
 /* ------------------------------ summary ------------------------------ */

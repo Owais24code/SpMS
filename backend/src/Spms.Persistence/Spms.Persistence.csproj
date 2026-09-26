@@ -12,8 +12,11 @@
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
   </ItemGroup>
   <ItemGroup>
-    <!-- The reviewed, generated schema is the body of the baseline migration. It is
-         linked, not copied, so there is exactly one copy of it in the repository. -->
-    <EmbeddedResource Include="..\..\..\database\schema\*.sql" LogicalName="Spms.Schema.%(Filename)%(Extension)" />
+    <!-- Migration SQL is FROZEN with its migration: Migrations/Sql/<Migration>/*.sql.
+         The reference schema (database/schema) keeps evolving from database/model;
+         a CI test builds a database both ways and requires them to be identical.
+         Roles are cluster-level and come from the reference file directly. -->
+    <EmbeddedResource Include="Migrations\Sql\**\*.sql" LogicalName="Spms.Migrations.%(RecursiveDir)%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\..\..\database\schema\000_roles.sql" LogicalName="Spms.Schema.000_roles.sql" />
   </ItemGroup>
 </Project>

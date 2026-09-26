@@ -1,56 +1,42 @@
 import { inject } from '@angular/core';
 import type { HttpInterceptorFn, HttpRequest } from '@angular/common/http';
-import { environment } from '../../../environments/environment';
-import { AuthService } from '../services/auth.service';
+import { from, switchMap } from 'rxjs';
+import { AuthService, SKIP_AUTH } from '../services/auth.service';
+import { GuestSession } from '../services/guest-session.service';
 
 /**
- * Attaches the caller's identity.
+ * Attaches the caller's identity, in one place:
  *
- * Today that is the API's development header set, which it only trusts in its
- * own Development environment; outside it every scoped endpoint answers 401
- * until Entra ID lands. When it does, `bearer()` below replaces `devHeaders()`
- * in ONE place and nothing else in the client changes — that is the only
- * reason this is a separate interceptor rather than two lines in the client.
+ *   entra    Authorization: Bearer <Entra access token> + X-Spa-Property
+ *   demo     X-Spa-Login: <seeded dev login> + X-Spa-Property (API Development only)
+ *   guest    Authorization: Bearer <guest session> for /guest/* calls
  *
- * Scopes come from the signed-in principal rather than a constant, so the role
- * switcher in the UI produces the 403s a real token would. The server discards
- * unknown scope strings, and defaultEffect is deny.
+ * The API decides everything else — roles, properties, scopes — from what
+ * this proves; nothing the client claims about itself is trusted.
  */
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
   // Health probes are unauthenticated by design, and sending identity to them
   // would make a liveness check fail differently from how the probe will.
-  if (isHealthProbe(req)) return next(req);
+  if (isHealthProbe(req) || req.context.get(SKIP_AUTH) || req.headers.has('Authorization')) return next(req);
+
+  if (isGuestCall(req)) {
+    const token = inject(GuestSession).token();
+    return next(token ? req.clone({ setHeaders: bearer(token) }) : req);
+  }
 
   const auth = inject(AuthService);
-  return next(req.clone({ setHeaders: devHeaders(auth) }));
+  return from(auth.requestHeaders()).pipe(
+    switchMap((headers) => next(req.clone({ setHeaders: headers }))),
+  );
 };
 
-const isHealthProbe = (req: HttpRequest<unknown>): boolean =>
-  /\/health(\/live|\/ready)?$/.test(new URL(req.url, 'http://local').pathname);
+const pathOf = (req: HttpRequest<unknown>): string => new URL(req.url, 'http://local').pathname;
 
-/**
- * Development identity. Space-separated scopes, exactly as the server splits
- * them.
- */
-const devHeaders = (auth: AuthService): Record<string, string> => {
-  const user = auth.user();
-  const id = environment.devIdentity;
-  return {
-    'X-Spa-Scopes': (user?.scopes ?? []).join(' '),
-    'X-Spa-Tenant': id.tenant,
-    'X-Spa-Property': id.property,
-    // The actor lands verbatim in the audit trail, so a signed-in operator's
-    // own name has to win over the configured default.
-    'X-Spa-Actor': user?.name ?? id.actor,
-  };
-};
+const isHealthProbe = (req: HttpRequest<unknown>): boolean => /\/health(\/live|\/ready)?$/.test(pathOf(req));
 
-/**
- * Production identity, for when the token source exists.
- *
- * Kept next to the header form on purpose: the swap is this function's name in
- * `authInterceptor` above, and a reviewer can see both shapes at once.
- */
+/** The guest web's own endpoints. /guests/* (plural) is staff-facing and keeps the operator's identity. */
+const isGuestCall = (req: HttpRequest<unknown>): boolean => /\/guest(\/|$)/.test(pathOf(req));
+
 export const bearer = (accessToken: string): Record<string, string> => ({
   Authorization: `Bearer ${accessToken}`,
 });

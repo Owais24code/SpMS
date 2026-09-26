@@ -1,9 +1,12 @@
 import {
   ApplicationConfig,
+  inject,
+  provideAppInitializer,
   provideBrowserGlobalErrorListeners,
   provideZonelessChangeDetection,
 } from '@angular/core';
 import {
+  Router,
   provideRouter,
   withInMemoryScrolling,
   withRouterConfig,
@@ -14,6 +17,7 @@ import { routes } from './app.routes';
 import { authInterceptor } from './core/http/auth.interceptor';
 import { correlationInterceptor } from './core/http/correlation.interceptor';
 import { problemInterceptor } from './core/http/problem.interceptor';
+import { AuthService } from './core/services/auth.service';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -36,5 +40,13 @@ export const appConfig: ApplicationConfig = {
       }),
       withRouterConfig({ onSameUrlNavigation: 'reload' }),
     ),
+    // Before the first navigation: finish an Entra redirect or re-read /me for
+    // a remembered dev login, so the auth guard sees the restored operator.
+    provideAppInitializer(async () => {
+      const auth = inject(AuthService);
+      const router = inject(Router);
+      const returnUrl = await auth.restore();
+      if (returnUrl && auth.isSignedIn()) queueMicrotask(() => void router.navigateByUrl(returnUrl));
+    }),
   ],
 };

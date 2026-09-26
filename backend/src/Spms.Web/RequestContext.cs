@@ -34,6 +34,11 @@ public sealed record RequestContext(
 
     public bool Has(string scope) => Scopes.Contains(scope);
 
+    /// <summary>The guest a guest session acts for (ActorType Guest only).</summary>
+    public Guid? GuestId { get; init; }
+
+    public bool IsGuest => ActorType == ActorType.Guest && GuestId is not null;
+
     /// <summary>The tenant and property as the uuid strings module ports take.</summary>
     public string Tenant() => TenantId.ToString("D");
     public string Property() => PropertyId.ToString("D");
@@ -79,11 +84,22 @@ public sealed record RequestContext(
 
         if (user?.Identity?.IsAuthenticated != true) return anonymous;
 
+        // SpMS's own effective scopes (role-derived, narrowed by the token) win.
+        // A raw token scp is only read when nothing resolved the caller — the
+        // development header scheme — so a token can never widen what its
+        // roles grant.
         var scopes = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var claim in user.FindAll(SpmsClaims.Scope))
-            foreach (var one in claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                scopes.Add(one);
-        foreach (var claim in user.FindAll(SpmsClaims.Roles)) scopes.Add(claim.Value.Trim());
+        var effective = user.FindAll(SpmsClaims.EffectiveScope).ToList();
+        if (effective.Count > 0)
+        {
+            foreach (var claim in effective) scopes.Add(claim.Value.Trim());
+        }
+        else
+        {
+            foreach (var claim in user.FindAll(SpmsClaims.Scope))
+                foreach (var one in claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    scopes.Add(one);
+        }
 
         _ = Guid.TryParse(user.FindFirst(SpmsClaims.TenantId)?.Value, out var tenant);
         _ = Guid.TryParse(user.FindFirst(SpmsClaims.PropertyId)?.Value, out var property);
@@ -103,12 +119,17 @@ public sealed record RequestContext(
                     ?? principal?.ToString()
                     ?? "unknown";
 
+        Guid? guest = Guid.TryParse(user.FindFirst(SpmsClaims.GuestId)?.Value, out var gid) ? gid : null;
+
         return new RequestContext(
             TenantId: tenant, PropertyId: property, PrincipalId: principal, ActorType: actorType,
             Actor: actor.Trim(), CorrelationId: correlation, Scopes: scopes, PropertyIds: properties,
             // A caller with no resolved tenant or property cannot be scoped, so
             // it is not usable identity however valid its token's signature.
-            Authenticated: tenant != Guid.Empty && property != Guid.Empty);
+            Authenticated: tenant != Guid.Empty && property != Guid.Empty)
+        {
+            GuestId = guest,
+        };
     }
 
     /// <summary>
@@ -137,4 +158,9 @@ public static class SpmsClaims
     public const string ActorType = "spa_actor_type";
     public const string GuestId = "spa_guest";
     public const string SessionPurpose = "spa_purpose";
+    public const string SessionEntity = "spa_entity";
+    /// <summary>A role code SpMS resolved for the caller (repeated).</summary>
+    public const string Role = "spa_role";
+    /// <summary>A scope SpMS grants the caller (repeated): role scopes narrowed by the token.</summary>
+    public const string EffectiveScope = "spa_scope";
 }

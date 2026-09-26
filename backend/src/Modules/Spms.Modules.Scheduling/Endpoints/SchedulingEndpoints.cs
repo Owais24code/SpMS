@@ -45,10 +45,11 @@ public static class SchedulingEndpoints
 
     private static async Task<IResult> Availability(
         HttpContext http, IAppointmentRepository repo, IServiceCatalog services,
-        IPropertyDirectory properties, string? date, string? serviceId, CancellationToken ct)
+        IPropertyDirectory properties, AppointmentAccess access, string? date, string? serviceId, CancellationToken ct)
     {
         var ctx = RequestContext.From(http);
         if (Guard.RequireScope(ctx, SpaScopes.Read) is { } denied) return denied;
+        if (await access.PropertyAsync(ctx, "can_view_board", ct) is { } refused) return refused;
 
         if (!DateOnly.TryParse(date ?? "", out var day))
             return Problem.From(ApiError.ValidationFailed, ctx.CorrelationId,
@@ -135,10 +136,12 @@ public static class SchedulingEndpoints
     /* ------------------------------- preflight ----------------------------- */
 
     private static async Task<IResult> Preflight(
-        HttpContext http, SchedulingService scheduling, IAppointmentRepository repo, IClock clock, CancellationToken ct)
+        HttpContext http, SchedulingService scheduling, IAppointmentRepository repo, IClock clock,
+        AppointmentAccess access, CancellationToken ct)
     {
         var ctx = RequestContext.From(http);
         if (Guard.RequireScope(ctx, SpaScopes.Schedule) is { } denied) return denied;
+        if (await access.PropertyAsync(ctx, "can_preflight", ct) is { } refused) return refused;
 
         var (body, readFailure) = await Guard.ReadBodyAsync(http, ctx, ct);
         if (body is null) return readFailure!;
@@ -194,8 +197,8 @@ public static class SchedulingEndpoints
     /* -------------------------------- commit ------------------------------- */
 
     private static async Task<IResult> Reassign(
-        HttpContext http, SchedulingService scheduling, IIdempotencyStore idem,
-        IClock clock, ILoggerFactory loggers, string id, CancellationToken ct)
+        HttpContext http, SchedulingService scheduling, IIdempotencyStore idem, IAppointmentRepository repo,
+        AppointmentAccess access, IClock clock, ILoggerFactory loggers, string id, CancellationToken ct)
     {
         var ctx = RequestContext.From(http);
         if (Guard.RequireScope(ctx, SpaScopes.Schedule) is { } denied) return denied;
@@ -207,12 +210,12 @@ public static class SchedulingEndpoints
 
         return await Idempotency.RunAsync(
             http, idem, ctx, logger, "appointments.reassign", body, clock.UtcNow,
-            () => ReassignCore(http, scheduling, ctx, id, body, ct), ct);
+            () => ReassignCore(http, scheduling, repo, access, ctx, id, body, ct), ct);
     }
 
     private static async Task<Idempotency.Outcome> ReassignCore(
-        HttpContext http, SchedulingService scheduling, RequestContext ctx,
-        string id, string body, CancellationToken ct)
+        HttpContext http, SchedulingService scheduling, IAppointmentRepository repo, AppointmentAccess access,
+        RequestContext ctx, string id, string body, CancellationToken ct)
     {
         if (!Guard.TryParse<ReassignRequest>(body, ctx, out var req, out var parseFailure))
             return Idempotency.Refused(parseFailure!);
@@ -226,6 +229,16 @@ public static class SchedulingEndpoints
         if (req.Reason is { Length: > 1000 })
             return Idempotency.Refused(Problem.From(ApiError.ValidationFailed, ctx.CorrelationId,
                 "reason may not exceed 1000 characters."));
+
+        var target = await repo.GetAsync(ctx.Tenant(), ctx.Property(), id, ct);
+        if (target is not null)
+        {
+            if (await access.AppointmentAsync(ctx, target, "can_reassign", ct, strong: true) is { } refused)
+                return Idempotency.Refused(refused);
+            if (!string.IsNullOrWhiteSpace(req.Reason)
+                && await access.AppointmentAsync(ctx, target, "can_override_soft_conflict", ct) is { } noOverride)
+                return Idempotency.Refused(noOverride);
+        }
 
         // The route id is passed down and checked against the token's own
         // proposal. It was previously ignored, so a client bug could

@@ -1,5 +1,6 @@
 using Npgsql;
 using Spms.Host;
+using Spms.Host.Authorization;
 using Spms.Persistence;
 using Spms.SharedKernel;
 using Spms.Web;
@@ -26,12 +27,16 @@ builder.Services.AddSpmsPersistence(connectionString, o =>
 
 builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddSpmsProtection(builder.Configuration, builder.Environment);
+// Guest magic links: where the guest web lives, and (Development only) logging links instead of sending them.
+builder.Services.AddSingleton(builder.Configuration.GetSection("Guest:Links").Get<Spms.Modules.Guest.Identity.GuestLinkOptions>()
+    ?? new Spms.Modules.Guest.Identity.GuestLinkOptions { LogLinks = builder.Environment.IsDevelopment() });
 builder.Services.AddSpmsModules();
 
 /* --------------------------------- auth --------------------------------- */
 
 builder.Services.AddSpmsAuthentication(builder.Configuration, builder.Environment);
 builder.Services.AddAuthorization();
+builder.Services.AddSpmsAuthorization(builder.Configuration, builder.Environment);
 
 /* --------------------------------- cors --------------------------------- */
 
@@ -80,12 +85,23 @@ if (app.Configuration.GetValue("Database:MigrateOnStartup", false))
 // about whatever drifted.
 await SchemaGate.VerifyAsync(app.Services, ownerConnection, app.Logger);
 
+// `Spms.Host --fga-sync` rewrites every OpenFGA tuple from the tables (after a
+// store restore, or to repair drift), then exits.
+if (args.Contains("--fga-sync"))
+{
+    await app.Services.GetRequiredService<Spms.Host.Authorization.FgaClientHolder>().BootstrapIfNeededAsync(app);
+    await app.Services.GetRequiredService<Spms.Host.Authorization.FgaReconciler>().RunAsync();
+    return;
+}
+
 if (app.Environment.IsDevelopment())
 {
     app.Logger.LogWarning(
         "Development: the {Scheme} authentication scheme is enabled and X-Spa-* headers are trusted.", SpmsAuth.DevScheme);
     await DevSeed.ApplyAsync(ownerConnection, app.Configuration["Database:MigrationRole"] ?? "spms_owner");
 }
+
+await app.StartAuthorizationAsync();
 
 app.UseCors();
 
@@ -125,7 +141,9 @@ app.UseAuthorization();
 app.MapMeta(app.Environment);
 
 // Every module endpoint runs inside one scoped request transaction.
-app.MapGroup("").AddEndpointFilter<RequestTransactionFilter>().MapSpmsModules();
+var api = app.MapGroup("").AddEndpointFilter<RequestTransactionFilter>();
+api.MapIdentityEndpoints();
+api.MapSpmsModules();
 
 await app.RunAsync();
 

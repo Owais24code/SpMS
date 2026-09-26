@@ -22,6 +22,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.0" />
+    <PackageReference Include="OpenFga.Sdk" Version="0.10.4" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.7">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
@@ -29,5 +30,7 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="..\..\..\database\seed\dev.sql" LogicalName="Spms.Seed.dev.sql" />
+    <!-- Generated with the fga CLI (model transform) from authorization/model.fga; CI checks it is current. -->
+    <EmbeddedResource Include="..\..\..\authorization\model.json" LogicalName="Spms.Authorization.model.json" />
   </ItemGroup>
 </Project>

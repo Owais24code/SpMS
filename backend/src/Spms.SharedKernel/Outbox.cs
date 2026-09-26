@@ -41,4 +41,32 @@ public static class EventTypes
     public const string MessageScheduled = "messaging.message.scheduled.v1";
     public const string StockMoved = "inventory.stock.moved.v1";
     public const string VisitChanged = "scheduling.visit.changed.v1";
+    public const string PropertyRegistered = "core.property.registered.v1";
+    public const string MagicLinkIssued = "guest.magic_link.issued.v1";
+}
+
+/// <summary>An event read back from core.event_outbox by the publisher.</summary>
+public sealed record OutboxMessage(
+    Guid EventId,
+    DateTimeOffset OccurredAt,
+    Guid TenantId,
+    Guid? PropertyId,
+    string EventType,
+    string AggregateType,
+    Guid AggregateId,
+    int? AggregateVersion,
+    string PayloadJson,
+    string? CorrelationId,
+    int AttemptCount);
+
+/// <summary>
+/// Something done after a change commits: an OpenFGA tuple write, a message
+/// scheduled, an integration notified. Handlers must be idempotent — the
+/// publisher delivers at least once, and retries a failed handler with backoff.
+/// </summary>
+public interface IOutboxHandler
+{
+    string Name { get; }
+    bool Handles(string eventType);
+    Task HandleAsync(OutboxMessage message, CancellationToken ct);
 }

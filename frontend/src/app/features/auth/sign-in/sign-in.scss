@@ -99,3 +99,12 @@
   &__who { grid-column: 1; font-size: var(--text-xs); color: var(--fg-muted); }
   &__scopes { grid-row: 1 / 3; align-self: center; font-size: var(--text-xs); color: var(--fg-subtle); }
 }
+
+.card__error {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-md);
+  color: var(--status-danger-fg);
+  background: var(--status-danger-bg);
+  font-size: 0.925rem;
+}

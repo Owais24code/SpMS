@@ -19,42 +19,59 @@ import { AuthService, ROLE_PRESETS, type RoleKey } from '../../../core/services/
 
       <main class="card" id="main">
         <h1 class="card__title">Sign in</h1>
-        <p class="card__sub">
-          Demo build — pick a role to see how the workspace changes. Real deployments
-          authenticate against your identity provider.
-        </p>
 
-        <fieldset class="roles">
-          <legend class="visually-hidden">Choose a role</legend>
-          @for (r of roles; track r.key) {
-            <label class="role" [class.is-picked]="picked() === r.key">
-              <input
-                type="radio" name="role" [value]="r.key"
-                [checked]="picked() === r.key"
-                (change)="picked.set(r.key)"
-              />
-              <span class="role__name">{{ r.roleLabel }}</span>
-              <span class="role__who">{{ r.name }} · {{ r.property }}</span>
-              <span class="role__scopes numeric">{{ r.scopes.length }} scopes</span>
-            </label>
-          }
-        </fieldset>
+        @if (auth.error(); as err) {
+          <p class="card__error" role="alert">{{ err }}</p>
+        }
 
-        <button type="button" class="btn btn--primary btn--lg card__go" (click)="go()">
-          Enter workspace
-        </button>
+        @if (auth.mode === 'entra') {
+          <p class="card__sub">Sign in with your organisation's Microsoft account.</p>
+          <button type="button" class="btn btn--primary btn--lg card__go" [disabled]="auth.busy()" (click)="entra()">
+            {{ auth.busy() ? 'Redirecting…' : 'Sign in with Microsoft' }}
+          </button>
+        } @else {
+          <p class="card__sub">
+            @if (auth.mode === 'demo') {
+              Development sign-in — each role is a seeded login. The API resolves it
+              exactly as it resolves an Entra token: roles, properties and scopes come
+              from the database.
+            } @else {
+              Offline demo — no API is running, so these presets stand in for the server.
+            }
+          </p>
 
-        <p class="card__note">
-          Signing in as Front desk hides finance and configuration screens entirely —
-          that is the scope guard working, not a missing page.
-        </p>
+          <fieldset class="roles" [disabled]="auth.busy()">
+            <legend class="visually-hidden">Choose a role</legend>
+            @for (r of roles; track r.key) {
+              <label class="role" [class.is-picked]="picked() === r.key">
+                <input
+                  type="radio" name="role" [value]="r.key"
+                  [checked]="picked() === r.key"
+                  (change)="picked.set(r.key)"
+                />
+                <span class="role__name">{{ r.roleLabel }}</span>
+                <span class="role__who">{{ r.name }} · {{ r.property }}</span>
+                <span class="role__scopes numeric">{{ auth.mode === 'demo' ? r.login : r.scopes.length + ' scopes' }}</span>
+              </label>
+            }
+          </fieldset>
+
+          <button type="button" class="btn btn--primary btn--lg card__go" [disabled]="auth.busy()" (click)="go()">
+            {{ auth.busy() ? 'Signing in…' : 'Enter workspace' }}
+          </button>
+
+          <p class="card__note">
+            Signing in as Front desk hides finance and configuration screens entirely —
+            that is the scope guard working, not a missing page.
+          </p>
+        }
       </main>
     </div>
   `,
   styleUrl: './sign-in.scss',
 })
 export class SignIn {
-  private readonly auth = inject(AuthService);
+  protected readonly auth = inject(AuthService);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
 
@@ -65,9 +82,16 @@ export class SignIn {
 
   protected readonly picked = signal<RoleKey>('spa_manager');
 
-  protected go(): void {
-    this.auth.signIn(this.picked());
+  private get returnUrl(): string {
     const target = this.route.snapshot.queryParamMap.get('returnUrl') ?? '/app';
-    this.router.navigateByUrl(target);
+    return target.startsWith('/') && !target.startsWith('//') ? target : '/app';
+  }
+
+  protected async go(): Promise<void> {
+    if (await this.auth.signIn(this.picked())) void this.router.navigateByUrl(this.returnUrl);
+  }
+
+  protected entra(): void {
+    void this.auth.signInWithEntra(this.returnUrl);
   }
 }

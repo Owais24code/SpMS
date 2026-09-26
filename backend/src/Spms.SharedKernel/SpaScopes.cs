@@ -18,4 +18,7 @@ public static class SpaScopes
     public const string Inventory        = "spa.inventory";
     public const string Reconcile        = "spa.reconcile";
     public const string Admin            = "spa.admin";
+
+    /// <summary>A signed-in guest acting on their own affairs (magic-link session).</summary>
+    public const string GuestSelf        = "spa.guest.self";
 }

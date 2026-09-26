@@ -35,6 +35,32 @@ public static class Guard
     }
 
     /// <summary>
+    /// The relationship check (OpenFGA), after the scope check. Answers 403
+    /// when the relationship is absent and 503 when the decider cannot be
+    /// reached — closed, never a silent allow.
+    /// </summary>
+    public static async Task<IResult?> RequireAccessAsync(
+        RequestContext ctx, IAccessDecider access, string relation, string @object,
+        IReadOnlyList<FgaTuple>? contextual = null, bool strong = false,
+        IReadOnlyDictionary<string, object>? context = null, CancellationToken ct = default)
+    {
+        if (!ctx.Authenticated || ctx.PrincipalId is not { } principal)
+            return Problem.From(ApiError.AuthenticationRequired, ctx.CorrelationId, "Present a bearer token.");
+        try
+        {
+            var d = await access.CheckAsync(new AccessCheck(Fga.User(principal), relation, @object, contextual, context, strong), ct);
+            return d.Allowed
+                ? null
+                : Problem.From(ApiError.AuthorizationDenied, ctx.CorrelationId, $"You do not have {relation} on this record.");
+        }
+        catch (AccessUnavailableException)
+        {
+            return Problem.From(ApiError.DependencyTimeout, ctx.CorrelationId,
+                "Authorization could not be decided right now. Retry shortly.", retryable: true, retryAfterSeconds: 2);
+        }
+    }
+
+    /// <summary>
     /// Reads the body, refusing anything over the cap. Returns the body, or a
     /// failure to return instead — matching TryParse's shape rather than the
     /// callback the previous version used, which needed a null-forgiving
