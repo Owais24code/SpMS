@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, OnInit, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { ActivatedRoute } from '@angular/router';
 import { PageHeader } from '../../shared/components/page-header/page-header';
 import { ReferenceApi } from '../../core/api/reference-api';
 import { ToastService } from '../../core/services/toast.service';
@@ -256,8 +257,14 @@ export class StaffLive implements OnInit {
       this.grantService ||= services[0]?.serviceId ?? '';
       this.shift.staffId ||= team[0]?.staffId ?? '';
       await this.loadRoster();
+      // Deep link from the header search: /app/staff?id=… opens that person.
+      const id = this.route.snapshot.queryParamMap.get('id');
+      const person = id ? team.find((s) => s.staffId === id) : undefined;
+      if (person && !this.selected()) this.select(person);
     } catch (e) { this.fail(e); }
   }
+
+  private readonly route = inject(ActivatedRoute);
 
   private async loadRoster(): Promise<void> {
     const from = new Date(); const to = new Date(Date.now() + 14 * 86400_000);

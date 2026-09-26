@@ -3,7 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import type {
-  DeviceDto, KioskBookingDto, MappingDto, MessageDto, OutboxHealthDto, OwnershipDto, ReportCatalogDto, ReportRunDto, TemplateDto,
+  DeviceDto, KioskBookingDto, SearchHitDto, MappingDto, MessageDto, OutboxHealthDto, OwnershipDto, ReportCatalogDto, ReportRunDto, TemplateDto,
 } from '../models/ops';
 
 /** Messaging, reports, devices, integrations and the kiosk. One method per endpoint. */
@@ -41,6 +41,9 @@ export class OpsApi {
   outbox(): Promise<OutboxHealthDto> { return this.get('/integrations/outbox'); }
   replay(eventId: string): Promise<{ replayed: boolean }> { return this.post(`/integrations/outbox/${eventId}/replay`, {}); }
   mappings(): Promise<readonly MappingDto[]> { return this.get('/integrations/mappings'); }
+
+  /* universal search */
+  search(q: string): Promise<{ q: string; hits: readonly SearchHitDto[] }> { return this.get('/search', { q }); }
 
   /* kiosk */
   kioskLookup(confirmationNumber: string, lastName: string): Promise<KioskBookingDto> { return this.post('/kiosk/lookup', { confirmationNumber, lastName }); }

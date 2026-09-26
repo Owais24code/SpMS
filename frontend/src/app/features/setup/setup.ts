@@ -183,7 +183,7 @@ export class Setup implements OnInit {
   protected readonly closing = signal<RoomDto | null>(null);
   protected readonly me = computed(() => this.auth.user()?.principalId ?? null);
 
-  protected readonly keys = ['policy.deposit', 'policy.cancellation', 'messaging.quiet_hours', 'retention.audit'];
+  protected readonly keys = ['policy.deposit', 'policy.cancellation', 'messaging.quiet_hours', 'retention.messaging', 'property.operating_mode'];
   protected svc = { name: '', code: '', duration: 60, price: 100 };
   protected prices: Record<string, number> = {};
   protected room = { code: '', name: '', type: 'TreatmentRoom' };
@@ -204,7 +204,8 @@ export class Setup implements OnInit {
       'policy.deposit': '{"percent":50,"minimumMinor":2000}',
       'policy.cancellation': '{"noticeHours":24,"feePercent":50}',
       'messaging.quiet_hours': '{"start":"21:00","end":"08:00"}',
-      'retention.audit': '{"days":2555}',
+      'retention.messaging': '{"days":180}',
+      'property.operating_mode': '{"mode":"MarqueeIntegrated"}',
     } as Record<string, string>)[key] ?? '{}';
   }
 
@@ -263,7 +264,8 @@ export class Setup implements OnInit {
     let value: unknown;
     try { value = JSON.parse(this.proposal.value); } catch { this.toast.warn('That is not JSON', 'Write the value as a JSON object.'); return; }
     await this.run(async () => {
-      await this.api.proposeSetting({ settingKey: this.proposal.key, value, reason: this.proposal.reason });
+      // The operating mode is this property's own; every other policy here is the tenant's.
+      await this.api.proposeSetting({ settingKey: this.proposal.key, value, reason: this.proposal.reason, propertyOnly: this.proposal.key === 'property.operating_mode' });
       this.toast.success('Change proposed', 'Someone else approves it before it applies.');
       this.proposal.reason = '';
     });

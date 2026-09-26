@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, OnInit, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { ActivatedRoute } from '@angular/router';
 import { environment } from '../../../environments/environment';
 import { PageHeader } from '../../shared/components/page-header/page-header';
 import { StatePanel } from '../../shared/components/state-panel/state-panel';
@@ -259,8 +260,14 @@ export class Checkout implements OnInit {
 
   readonly hasOrder = computed(() => this.order() !== null);
 
+  private readonly route = inject(ActivatedRoute);
+
   ngOnInit(): void {
-    if (this.live) void this.load();
+    if (!this.live) return;
+    void this.load();
+    // Deep link from the header search: /app/checkout?order=… opens that bill.
+    const order = this.route.snapshot.queryParamMap.get('order');
+    if (order) void this.open(order);
   }
 
   async load(): Promise<void> {

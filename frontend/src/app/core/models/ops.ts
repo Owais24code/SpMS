@@ -43,6 +43,8 @@ export interface MappingDto extends Versioned {
   readonly mappingId: string; readonly entityType: string; readonly localId: string; readonly sourceSystem: string; readonly sourceKey: string; readonly status: string;
 }
 
+export interface SearchHitDto { readonly type: string; readonly id: string; readonly title: string; readonly subtitle: string | null; readonly link: string; }
+
 export interface KioskBookingDto {
   readonly appointmentId: string; readonly serviceName: string; readonly startUtc: string; readonly status: string;
   readonly greeting: string | null; readonly canCheckIn: boolean;

@@ -38,6 +38,9 @@ param datastoreSecretName string = 'openfga-datastore-uri'
 @description('Key Vault secret: preshared key the SpMS API presents to OpenFGA.')
 param presharedKeySecretName string = 'openfga-preshared-key'
 
+@description('Container Apps environment to join (api.bicep output environmentName). The API reaches OpenFGA over internal ingress, so both must share one environment. Empty = create one (OpenFGA on its own).')
+param managedEnvironmentName string = ''
+
 @minValue(1)
 param minReplicas int = 1
 
@@ -50,7 +53,7 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
 }
 
-resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = if (empty(managedEnvironmentName)) {
   name: '${baseName}-logs'
   location: location
   properties: {
@@ -59,19 +62,25 @@ resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
-resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
+resource sharedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' existing = if (!empty(managedEnvironmentName)) {
+  name: managedEnvironmentName
+}
+
+resource ownEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = if (empty(managedEnvironmentName)) {
   name: '${baseName}-env'
   location: location
   properties: {
     appLogsConfiguration: {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {
-        customerId: logs.properties.customerId
-        sharedKey: logs.listKeys().primarySharedKey
+        customerId: logs!.properties.customerId
+        sharedKey: logs!.listKeys().primarySharedKey
       }
     }
   }
 }
+
+var environmentId = empty(managedEnvironmentName) ? ownEnvironment.id : sharedEnvironment.id
 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: '${baseName}-id'
@@ -118,7 +127,7 @@ resource migrate 'Microsoft.App/jobs@2024-03-01' = {
   }
   dependsOn: [secretsAccess]
   properties: {
-    environmentId: environment.id
+    environmentId: environmentId
     configuration: {
       triggerType: 'Manual'
       replicaTimeout: 600
@@ -149,7 +158,7 @@ resource openfga 'Microsoft.App/containerApps@2024-03-01' = {
   }
   dependsOn: [secretsAccess]
   properties: {
-    managedEnvironmentId: environment.id
+    managedEnvironmentId: environmentId
     configuration: {
       secrets: secrets
       ingress: {

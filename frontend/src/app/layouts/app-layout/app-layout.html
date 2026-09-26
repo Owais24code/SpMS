@@ -110,7 +110,7 @@
       </svg>
       <input
         type="search"
-        placeholder="Jump to a screen…"
+        placeholder="Search guests, bookings, screens…"
         aria-label="Search the workspace"
         role="combobox"
         aria-expanded="false"
@@ -121,8 +121,8 @@
       />
       <kbd>/</kbd>
 
-      @if (matches().length) {
-        <ul class="results" id="search-results" role="listbox">
+      @if (matches().length || records().length) {
+        <ul class="results" id="search-results" role="listbox" data-testid="search-results">
           @for (m of matches(); track m.path) {
             <li role="option" [attr.aria-selected]="$first">
               <a [routerLink]="m.path" (click)="query.set('')">
@@ -131,6 +131,14 @@
                         stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
                 {{ m.label }}
+              </a>
+            </li>
+          }
+          @for (r of records(); track r.type + r.id) {
+            <li role="option" [attr.aria-selected]="false">
+              <a href="" (click)="$event.preventDefault(); openRecord(r)">
+                <span class="badge">{{ r.type }}</span>
+                {{ r.title }} @if (r.subtitle) { <span class="subtle">{{ r.subtitle }}</span> }
               </a>
             </li>
           }

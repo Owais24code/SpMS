@@ -347,6 +347,27 @@ public static class IntegrationEndpoints
             return await svc.ReplayAsync(id, ct) ? Results.Json(new { replayed = true }, Json.Options) : WebApi.NotFound(ctx);
         });
 
+        /* the property itself: its zone, currency and operating mode, and who owns what now */
+
+        app.MapGet("/properties/current", async (HttpContext http, SpmsDbContext db, IClock clock, CancellationToken ct) =>
+        {
+            var ctx = RequestContext.From(http);
+            if (Guard.RequireScope(ctx, SpaScopes.Read) is { } denied) return denied;
+            var p = await db.Set<PropertyRow>().AsNoTracking().SingleOrDefaultAsync(x => x.PropertyId == ctx.PropertyId, ct);
+            if (p is null) return WebApi.NotFound(ctx);
+            var now = clock.UtcNow.UtcDateTime;
+            var owners = (await db.Set<CapabilityOwnershipRow>().AsNoTracking().Where(o => o.PropertyId == p.PropertyId && o.Status == "Active").ToListAsync(ct))
+                .Where(o => o.EffectiveRange.LowerBound <= now && (o.EffectiveRange.UpperBoundInfinite || o.EffectiveRange.UpperBound > now))
+                .ToDictionary(o => o.CapabilityCode, o => o.OwnerSystem);
+            // With no explicit decision a standalone property owns its own; an integrated one has no owner until someone decides.
+            var payment = owners.GetValueOrDefault("Payment") ?? (p.OperatingMode == "Standalone" ? "Spa" : null);
+            return Results.Json(new
+            {
+                propertyId = p.PropertyId, p.Code, p.Name, timeZone = p.Timezone, currencyCode = p.CurrencyCode.Trim(), p.Locale, p.OperatingMode,
+                owners, paymentOwner = payment, paymentAmbiguous = payment is null,
+            }, Json.Options);
+        });
+
         /* ownership (Marquee mode) */
 
         app.MapGet("/integrations/ownership", async (HttpContext http, IntegrationService svc, CancellationToken ct) =>

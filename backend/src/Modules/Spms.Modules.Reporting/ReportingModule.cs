@@ -11,6 +11,7 @@ public static class ReportingModule
     {
         services.AddSingleton<IModelContributor, ReportingModelContributor>();
         services.AddScoped<ReportService>();
+        services.AddScoped<Spms.SharedKernel.IPropertyJob, ReportRetentionJob>();
         return services;
     }
 

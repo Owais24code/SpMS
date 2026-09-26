@@ -15,6 +15,7 @@ public static class MessagingModule
         services.AddScoped<MessagingService>();
         services.AddScoped<IPropertyJob, ReminderJob>();
         services.AddScoped<IPropertyJob, DispatchJob>();
+        services.AddScoped<IPropertyJob, MessageRetentionJob>();
         return services;
     }
 

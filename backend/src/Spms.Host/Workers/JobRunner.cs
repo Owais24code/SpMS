@@ -44,10 +44,13 @@ public sealed class JobRunner(
             {
                 try
                 {
-                    total += await RunOneAsync(name, tenant, property, ct);
+                    var changed = await RunOneAsync(name, tenant, property, ct);
+                    if (changed > 0) Telemetry.JobChanges.Add(changed, new KeyValuePair<string, object?>("job", name));
+                    total += changed;
                 }
                 catch (Exception e) when (e is not OperationCanceledException)
                 {
+                    Telemetry.JobFailures.Add(1, new KeyValuePair<string, object?>("job", name));
                     logger.LogError(e, "Job {Job} failed at property {Property}", name, property);
                 }
             }

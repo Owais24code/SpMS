@@ -1,4 +1,5 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, OnInit, computed, inject, signal } from '@angular/core';
+import { ActivatedRoute } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { PageHeader } from '../../shared/components/page-header/page-header';
 import { StatePanel } from '../../shared/components/state-panel/state-panel';
@@ -237,7 +238,15 @@ const PREFS: Record<string, readonly string[]> = {
     label { display: block; font-size: var(--text-sm); font-weight: var(--weight-bold); margin-bottom: var(--space-2); }
   `],
 })
-export class Guests {
+export class Guests implements OnInit {
+  private readonly route = inject(ActivatedRoute);
+
+  /** Deep link from the header search: /app/guests?id=… opens that guest. */
+  ngOnInit(): void {
+    const id = this.route.snapshot.queryParamMap.get('id');
+    if (id) void this.open(id);
+  }
+
   private readonly api = inject(GuestsApi);
   private readonly auth = inject(AuthService);
   private readonly toast = inject(ToastService);

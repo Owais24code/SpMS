@@ -21,6 +21,8 @@ public static class CoreModule
         services.AddScoped<SettingsReader>();
         services.AddScoped<SettingsAdmin>();
         services.AddScoped<DeviceService>();
+        services.AddScoped<LegalHolds>();
+        services.AddScoped<IPropertyJob, IdempotencyRetentionJob>();
         services.AddScoped<IntegrationService>();
         services.AddScoped<IPropertyJob, SettingActivationJob>();
         services.AddScoped<IOutbox, EfOutbox>();

@@ -214,6 +214,16 @@ jobs:
           chmod +x bicep
           ./bicep build infra/main.bicep --outfile /dev/null
           ./bicep build infra/openfga.bicep --outfile /dev/null
+          ./bicep build infra/api.bicep --outfile /dev/null
+
+  image:
+    name: API image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The image the api.bicep jobs and app run; built, not pushed.
+      - name: docker build
+        run: docker build -f backend/Dockerfile -t spms-api:ci .
 
   database:
     name: Database - R1 schema and SQL tests

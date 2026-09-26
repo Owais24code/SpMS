@@ -15,7 +15,7 @@
 --              ...0212 Marquee connector (login 'marquee'), ...0213 lobby kiosk device (login 'kiosk')
 --   staff      ...0601 Lena, ...0602 Marco, ...0603 Priya, ...0604 Dana, ...0605 Morgan
 --   services   ...0401-0406   rooms ...0501-0506   guests ...0701-0705   appointments ...0801-0805
---   spare rooms ...1001-1040 and walk-in guests ...2001-2040 (used by the HTTP sweep)
+--   spare rooms ...1001-1060 and walk-in guests ...2001-2060 (used by the HTTP sweep)
 --   stock      locations ...1101-1103, items ...1201-1204, variants ...1301-1304
 
 BEGIN;
@@ -94,13 +94,13 @@ ON CONFLICT (resource_id) DO NOTHING;
 INSERT INTO resources.resource (resource_id, tenant_id, property_id, resource_type, code, name)
 SELECT ('01920000-0000-7000-8000-00000000' || (1000 + n)::text)::uuid, '01920000-0000-7000-8000-000000000001',
        '01920000-0000-7000-8000-000000000101', 'TreatmentRoom', 'X' || lpad(n::text, 2, '0'), 'Spare ' || lpad(n::text, 2, '0')
-  FROM generate_series(1, 40) n
+  FROM generate_series(1, 60) n
 ON CONFLICT (resource_id) DO NOTHING;
 
 INSERT INTO guest.guest (guest_id, tenant_id, home_property_id, display_alias, public_queue_id)
 SELECT ('01920000-0000-7000-8000-00000000' || (2000 + n)::text)::uuid, '01920000-0000-7000-8000-000000000001',
        '01920000-0000-7000-8000-000000000101', 'Walk-in ' || lpad(n::text, 2, '0'), 'W' || lpad(n::text, 2, '0')
-  FROM generate_series(1, 40) n
+  FROM generate_series(1, 60) n
 ON CONFLICT (guest_id) DO NOTHING;
 
 INSERT INTO workforce.staff (staff_id, tenant_id, principal_id, home_property_id, preferred_name, bookable) VALUES

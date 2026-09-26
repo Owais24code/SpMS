@@ -194,6 +194,34 @@ public sealed class ReportService(SpmsDbContext db, IUnitOfWork uow, IClock cloc
     }
 }
 
+/// <summary>
+/// An expired run keeps its hash and definition but loses its result (the
+/// run's record that it existed is what an audit needs); a run under a legal
+/// hold is left whole.
+/// </summary>
+public sealed class ReportRetentionJob(SpmsDbContext db, Spms.Modules.Core.Infrastructure.LegalHolds holds, IClock clock) : IPropertyJob
+{
+    public string Name => "reporting.retention";
+    public TimeSpan Interval => TimeSpan.FromHours(6);
+
+    public async Task<int> RunAsync(CancellationToken ct)
+    {
+        var now = clock.UtcNow;
+        var held = await holds.HeldKeysAsync("reporting.report_run", ct);
+        var due = await db.Set<ReportRunRow>().Where(r => r.ExpiresAt < now && r.Status == "Succeeded").Take(200).ToListAsync(ct);
+        var n = 0;
+        foreach (var r in due.Where(r => !held.Contains(r.ReportRunId.ToString())))
+        {
+            r.Status = "Expired";
+            r.ResultJson = null;
+            n++;
+        }
+        await db.SaveChangesAsync(ct);
+        db.ChangeTracker.Clear();
+        return n;
+    }
+}
+
 public static class ReportEndpoints
 {
     private static object Run(ReportRunRow r, bool withResult)

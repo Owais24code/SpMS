@@ -288,6 +288,7 @@ public static class CommerceEndpoints
 
     private static Idempotency.Outcome Outcome(HttpContext http, RequestContext ctx, CommerceService.Result<PaymentResult> r)
     {
+        Telemetry.Payments.Add(1, new KeyValuePair<string, object?>("outcome", r.Value?.Outcome.ToString() ?? r.Outcome.ToString()));
         var result = PaymentResultOf(http, ctx, r);
         if (r.Outcome == CommerceService.Outcome.Ok)
         {

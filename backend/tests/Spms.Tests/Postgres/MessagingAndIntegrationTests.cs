@@ -163,3 +163,102 @@ public class MessagingAndIntegrationTests(PostgresFixture fixture) : IClassFixtu
         Assert.False(ReportService.Verify(tampered).ResultIntact);
     }
 }
+
+/// <summary>Batch 8: retention jobs and the governed operating mode, against the real database.</summary>
+public class RetentionAndModeTests(PostgresFixture fixture) : IClassFixture<PostgresFixture>
+{
+    private const string T = PostgresWorld.Tenant;
+    private const string P = PostgresWorld.Property;
+    private static string Id(string name) => TestIds.Of(name);
+
+    private IServiceScope Scope(DateTimeOffset at, string principal = "principal-system") => fixture.NewScope(T, [P], P, new TestClock(at), principal);
+
+    private static async Task<TResult> InTx<TResult>(IServiceScope scope, Func<Task<TResult>> work)
+    {
+        await using var tx = await scope.ServiceProvider.GetRequiredService<IUnitOfWork>().BeginAsync();
+        var r = await work();
+        await tx.CommitAsync();
+        return r;
+    }
+
+    [RequiresPostgres]
+    public async Task An_expired_report_loses_its_result_but_a_held_one_is_kept()
+    {
+        await fixture.ResetBoardAsync();
+        await fixture.SeedReferenceAsync(T, P);
+        var now = DateTimeOffset.UtcNow;
+        ReportRunRowIds ids;
+        using (var s = Scope(now))
+        {
+            var reports = s.ServiceProvider.GetRequiredService<ReportService>();
+            var d = ReportService.Find("inventory.low-stock")!;
+            var day = DateOnly.FromDateTime(now.UtcDateTime);
+            var a = await reports.RunAsync(d, day, "UTC", ReportService.DayStartUtc(day, "UTC"), ReportService.DayStartUtc(day.AddDays(1), "UTC"), default);
+            var b = await reports.RunAsync(d, day, "UTC", ReportService.DayStartUtc(day, "UTC"), ReportService.DayStartUtc(day.AddDays(1), "UTC"), default);
+            ids = new(a.ReportRunId, b.ReportRunId);
+        }
+        await fixture.ExecAsync($"""
+            INSERT INTO core.legal_hold (tenant_id, entity_table, entity_key, hold_scope, reason, status)
+            VALUES ('{Id(T)}', 'reporting.report_run', '{ids.Held}', 'Entity', 'test hold', 'Active');
+            """);
+        using (var later = Scope(now.AddDays(31)))
+        {
+            var job = later.ServiceProvider.GetServices<IPropertyJob>().Single(j => j.Name == "reporting.retention");
+            Assert.Equal(1, await InTx(later, () => job.RunAsync(default)));
+        }
+        Assert.Equal("Expired", await fixture.ScalarAsync<string>($"SELECT status FROM reporting.report_run WHERE report_run_id = '{ids.Expired}'"));
+        Assert.True(await fixture.ScalarAsync<bool>($"SELECT result_json IS NULL AND result_sha256 IS NOT NULL FROM reporting.report_run WHERE report_run_id = '{ids.Expired}'"));
+        Assert.Equal("Succeeded", await fixture.ScalarAsync<string>($"SELECT status FROM reporting.report_run WHERE report_run_id = '{ids.Held}'"));
+        await fixture.ExecAsync($"DELETE FROM core.legal_hold WHERE entity_key = '{ids.Held}'");
+    }
+
+    private sealed record ReportRunRowIds(Guid Expired, Guid Held);
+
+    [RequiresPostgres]
+    public async Task Expired_idempotency_records_are_deleted_and_live_ones_kept()
+    {
+        await fixture.ResetBoardAsync();
+        await fixture.SeedReferenceAsync(T, P);
+        await fixture.ExecAsync($"""
+            INSERT INTO core.idempotency_record (tenant_id, property_id, operation, route, idempotency_key, request_hash, expires_at)
+            VALUES ('{Id(T)}', '{Id(P)}', 'op', '/x', 'old-key-0001', repeat('a', 64), now() - interval '1 day'),
+                   ('{Id(T)}', '{Id(P)}', 'op', '/x', 'new-key-0001', repeat('b', 64), now() + interval '1 day');
+            """);
+        using var s = Scope(DateTimeOffset.UtcNow);
+        var job = s.ServiceProvider.GetServices<IPropertyJob>().Single(j => j.Name == "core.retention.idempotency");
+        Assert.Equal(1, await InTx(s, () => job.RunAsync(default)));
+        Assert.Equal(1L, await fixture.ScalarAsync<long>("SELECT count(*) FROM core.idempotency_record WHERE idempotency_key = 'new-key-0001'"));
+    }
+
+    [RequiresPostgres]
+    public async Task An_approved_operating_mode_is_written_to_the_property_when_it_takes_effect()
+    {
+        await fixture.ResetBoardAsync();
+        await fixture.SeedReferenceAsync(T, P);
+        await fixture.ExecAsync($"DELETE FROM core.setting WHERE tenant_id = '{Id(T)}' AND setting_key = 'property.operating_mode'");
+        var now = DateTimeOffset.UtcNow;
+        Guid id;
+        using (var author = Scope(now, "principal-author"))
+        {
+            var admin = author.ServiceProvider.GetRequiredService<Spms.Modules.Core.Settings.SettingsAdmin>();
+            var v = JsonDocument.Parse("{\"mode\":\"MarqueeIntegrated\"}").RootElement;
+            var tenantWide = await InTx(author, () => admin.ProposeAsync(new Spms.Modules.Core.Settings.SettingProposal("property.operating_mode", v, false, null, null, "pilot"), now, default));
+            Assert.Equal(EditOutcome.Invalid, tenantWide.Outcome);
+            id = (await InTx(author, () => admin.ProposeAsync(new Spms.Modules.Core.Settings.SettingProposal("property.operating_mode", v, true, null, null, "pilot"), now, default))).Row!.SettingId;
+        }
+        try
+        {
+            using (var approver = Scope(now, "principal-approver"))
+            {
+                var r = await approver.ServiceProvider.GetRequiredService<Spms.Modules.Core.Settings.SettingsAdmin>().DecideAsync(id, 1, true, null, default);
+                Assert.Equal("Active", r.Row!.Status);
+            }
+            Assert.Equal("MarqueeIntegrated", await fixture.ScalarAsync<string>($"SELECT operating_mode FROM core.property WHERE property_id = '{Id(P)}'"));
+        }
+        finally
+        {
+            await fixture.ExecAsync($"UPDATE core.property SET operating_mode = 'Standalone', version = version + 1 WHERE property_id = '{Id(P)}';" +
+                                    $" DELETE FROM core.setting WHERE tenant_id = '{Id(T)}' AND setting_key = 'property.operating_mode'");
+        }
+    }
+}

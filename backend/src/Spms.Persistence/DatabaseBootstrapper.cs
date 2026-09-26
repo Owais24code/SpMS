@@ -37,6 +37,42 @@ public static class DatabaseBootstrapper
         await grant.ExecuteNonQueryAsync(ct);
     }
 
+    /// <summary>
+    /// Deployed environments connect with login roles, not the group roles:
+    /// the owner login may SET ROLE spms_owner (migrations, maintenance); the
+    /// runtime login may SET ROLE spms_app and the outbox publisher, and
+    /// through spms_app the intake and erasure roles. Idempotent: an existing
+    /// login has its password rotated to the one given.
+    /// </summary>
+    public static async Task EnsureLoginsAsync(string adminConnectionString, IEnumerable<(string Login, string Password, string[] Roles)> logins,
+        CancellationToken ct = default)
+    {
+        await using var conn = new NpgsqlConnection(adminConnectionString);
+        await conn.OpenAsync(ct);
+        foreach (var (login, password, roles) in logins)
+        {
+            if (!System.Text.RegularExpressions.Regex.IsMatch(login, "^[a-z][a-z0-9_]{2,62}$")) throw new ArgumentException($"Unsafe login name {login}.");
+            await using (var exists = new NpgsqlCommand("SELECT 1 FROM pg_roles WHERE rolname = @n", conn))
+            {
+                exists.Parameters.AddWithValue("n", login);
+                var sql = await exists.ExecuteScalarAsync(ct) is null
+                    ? $"CREATE ROLE {login} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD @p"
+                    : $"ALTER ROLE {login} PASSWORD @p";
+                // PASSWORD takes a literal, not a parameter: quote it through the server.
+                await using var quote = new NpgsqlCommand("SELECT quote_literal(@v)", conn);
+                quote.Parameters.AddWithValue("v", password);
+                var literal = (string)(await quote.ExecuteScalarAsync(ct))!;
+                await using var create = new NpgsqlCommand(sql.Replace("@p", literal), conn);
+                await create.ExecuteNonQueryAsync(ct);
+            }
+            foreach (var role in roles)
+            {
+                await using var grant = new NpgsqlCommand($"GRANT {role} TO {login} WITH INHERIT FALSE, SET TRUE", conn);
+                await grant.ExecuteNonQueryAsync(ct);
+            }
+        }
+    }
+
     public static async Task<IReadOnlyList<string>> MigrateAsync(
         string ownerConnectionString, IEnumerable<IModelContributor> contributors,
         string? migrationRole = "spms_owner", CancellationToken ct = default)

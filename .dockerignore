@@ -1,0 +1,11 @@
+**/bin
+**/obj
+**/node_modules
+frontend
+backend/vendor
+backend/tests
+**/.angular
+**/test-results
+**/playwright-report
+.git
+.preview

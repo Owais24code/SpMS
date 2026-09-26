@@ -37,3 +37,13 @@ export const farFutureUtc = (): string => {
   const d = new Date(Date.UTC(new Date().getUTCFullYear() + 1, 0, 1 + Math.floor(Math.random() * 360), 3, 0, 0));
   return d.toISOString();
 };
+
+/** Today at Riverside at hh:mm local (New York), as an instant. */
+export const riversideAt = (hh: number, mm: number): string => {
+  const day = riversideToday();
+  const time = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00`;
+  const probe = new Date(`${day}T${time}-05:00`);
+  const offset = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', timeZoneName: 'shortOffset' })
+    .formatToParts(probe).find((p) => p.type === 'timeZoneName')?.value === 'GMT-4' ? '-04:00' : '-05:00';
+  return new Date(`${day}T${time}${offset}`).toISOString();
+};

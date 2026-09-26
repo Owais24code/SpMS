@@ -25,6 +25,7 @@ import {
 } from './board-time';
 import { environment } from '../../../environments/environment';
 import { AuthService } from './auth.service';
+import { BoardStream } from './board-stream';
 
 export interface AuditEntry {
   readonly at: string;
@@ -148,7 +149,8 @@ export class WorkspaceStore {
     });
     effect(() => {
       const key = scopeKey();
-      if (!this.realApi || key === null) return;
+      if (!this.realApi) return;
+      if (key === null) { untracked(() => this.stream.stop()); return; }
       untracked(() => {
         this.services.set([]);
         this.boardRows.set([]);
@@ -156,8 +158,23 @@ export class WorkspaceStore {
         this.lastMove.set(null);
         void this.loadBoard();
         void this.loadArrivals();
+        // Live: another desk's change reloads this board, debounced so a burst is one reload.
+        this.stream.start(() => this.refreshSoon());
       });
     });
+  }
+
+  private readonly stream = inject(BoardStream);
+  /** True while the live board connection is open. */
+  readonly live = this.stream.connected;
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private refreshSoon(): void {
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    this.refreshTimer = setTimeout(() => {
+      void this.loadBoard();
+      void this.loadArrivals();
+    }, 400);
   }
 
   // ---- chart ranges -----------------------------------------------------

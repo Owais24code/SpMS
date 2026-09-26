@@ -335,6 +335,33 @@ manual upload, because edges hold `index.html`:
 Front Door Standard has a monthly base charge. Azure Static Web Apps is the free
 alternative, but it is a different resource.
 
+## Deployment (API and database)
+
+`infra/api.bicep` provisions the API on Azure Container Apps, PostgreSQL Flexible Server 16,
+Key Vault and Log Analytics / Application Insights. `infra/openfga.bicep` joins the same
+environment, because OpenFGA's ingress is internal. The image is `backend/Dockerfile`, built
+from the repository root. One image runs three entry points:
+
+- **The API**, with probes on `/health/live` and `/health/ready`.
+- **`--migrate`**, a manual Container Apps job the pipeline starts before rolling a revision.
+  It uses the admin connection to create the roles and two login roles (`spms_owner_login`,
+  which may SET ROLE `spms_owner`, and `spms_app_login`, which may SET ROLE `spms_app` and
+  `spms_outbox`), then migrates as the owner.
+- **`--maintain`**, a nightly scheduled job run as the owner. It keeps monthly partitions
+  three months ahead and drops outbox months that are wholly published and past retention.
+
+Every secret is a Key Vault secret, read through a user-assigned identity. PostgreSQL is
+public-endpoint with TLS required for R1; private networking is the R2 hardening step. The
+API stays at one replica until the live board's fan-out moves to a shared bus.
+
+```
+az deployment group create -g rg-spms-dev -f infra/api.bicep -p apiImage=... pgAdminPassword=... \
+   pgOwnerPassword=... pgAppPassword=... protectionKey=... lookupKey=... guestSigningKey=... metricsKey=... \
+   entraAuthority=https://login.microsoftonline.com/<tenant>/v2.0 entraAudience=api://spms webOrigin=https://<host>
+az deployment group create -g rg-spms-dev -f infra/openfga.bicep -p keyVaultName=<out> managedEnvironmentName=<out>
+az containerapp job start -g rg-spms-dev -n spms-dev-migrate
+```
+
 ---
 
 ## Status
@@ -350,11 +377,11 @@ Work is delivered in eight batches. Each is one commit on `main`.
 | 5 | Commerce and payments: orders, deposits, refunds with dual approval, reconciliation, payment ownership, provider-agnostic port; Checkout and live Reconciliation screens | Done |
 | 6 | Reference data: catalogue and property offering, rooms and closures, staff with HR file, roles, qualifications, credentials and roster, stock ledger with counts and laundry, governed settings; Staff, Inventory and Setup screens | Done |
 | 7 | Messaging, reporting, devices, integrations, Marquee mode, kiosk; Messaging, Reports, Devices, Integrations and kiosk screens | Done |
-| 8 | Operating mode, search, live board, partition/retention jobs, API + PostgreSQL bicep, observability | Planned |
+| 8 | Governed operating mode, universal search, live board, partition and retention jobs, API + PostgreSQL bicep and image, observability | Done |
 
-**Verified (batch 7):** backend 231/231 tests against PostgreSQL 16 and OpenFGA 1.10.2; HTTP
-sweep 121/121 in permissive and real-FGA modes; `fga model test` 14/14 tests (156 checks); web
-unit tests 12/12; Playwright e2e 19/19.
+**Verified (batch 8):** backend 234/234 tests against PostgreSQL 16 and OpenFGA 1.10.2; HTTP
+sweep 125/125 in permissive and real-FGA modes; `fga model test` 14/14 tests (156 checks); web
+unit tests 12/12; Playwright e2e 21/21 (stable across reruns); all three Bicep templates compile.
 
 **Scheduling operations (batch 3):**
 
@@ -376,6 +403,35 @@ unit tests 12/12; Playwright e2e 19/19.
 - **Room turnover** (`/turnaround`): a completed treatment creates a Turnover task. Housekeeping
   (`spa.inventory` plus `can_update_room_readiness`) completes it. `/front-desk/arrivals` reports the
   room as not ready while the task is open.
+
+**Operations (batch 8):**
+
+- **Operating mode** (§53.2, DEC-011) is governed like any policy. `property.operating_mode`
+  (`{"mode":"Standalone"|"MarqueeIntegrated"}`, property-only) is proposed by one person and
+  approved by another, and written to `core.property` when it takes effect. The mode is only the
+  default: an explicit capability owner still decides, and a Marquee-integrated property with no
+  payment decision answers `OWNERSHIP_AMBIGUOUS`. `/properties/current` shows the mode and who owns
+  payment now.
+- **Universal search** (`/search?q=`, the header box) covers guests (by keyed hash, alias or queue
+  id), bookings by confirmation number, orders by number or receipt, staff, services and rooms. A
+  section is searched only when the caller may see it, so the box cannot reveal that a record
+  exists. Results link straight to the record.
+- **Live board** (`/board/stream`, server-sent events). A committed change reaches every open board
+  at the property through an outbox handler. The event carries only a kind and an id, and the board
+  reloads through its ordinary authorized reads. The stream is authorized at connect
+  (`can_view_board`), holds no transaction, and keeps itself alive every 15 seconds. The client reads
+  it with `fetch`, because EventSource cannot send auth headers, and reconnects with backoff.
+- **Retention** (SEC-005). Idempotency records are deleted after they expire. Expired report runs
+  lose their result but keep their hashes. Finished messages lose their encrypted address after
+  `retention.messaging` days. Anything under an active `core.legal_hold` is left whole. Partition
+  upkeep and outbox pruning need the owner and run in `--maintain`; `/dev/maintenance/run` runs them
+  in Development.
+- **Observability**. The Spms `Meter` and `ActivitySource` come from System.Diagnostics, with no
+  vendor SDK. `/metrics` serves Prometheus text: requests by route template, method and status
+  class, a duration histogram, job changes and failures, payment and message outcomes, and gauges
+  for outbox backlog, oldest pending age and open board streams. Labels never carry an id. Outside
+  Development `/metrics` needs `X-Metrics-Key`. Logs are one JSON object per line, with the
+  correlation id and the W3C trace id in scope.
 
 **Messaging, reports, devices, integrations (batch 7):**
 

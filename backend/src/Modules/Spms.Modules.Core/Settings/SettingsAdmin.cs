@@ -43,6 +43,8 @@ public sealed partial class SettingsAdmin(SpmsDbContext db, MasterData master, I
             "messaging.quiet_hours" => value.TryGetProperty("start", out var s) && value.TryGetProperty("end", out var e)
                                        && TimeOnly.TryParse(s.GetString(), out _) && TimeOnly.TryParse(e.GetString(), out _) ? null
                 : "messaging.quiet_hours is {\"start\": \"21:00\", \"end\": \"08:00\"}.",
+            "property.operating_mode" => value.TryGetProperty("mode", out var mode) && mode.GetString() is "Standalone" or "MarqueeIntegrated" ? null
+                : "property.operating_mode is {\"mode\": \"Standalone\" | \"MarqueeIntegrated\"}.",
             _ when key.StartsWith("retention.", StringComparison.Ordinal) => Num(value, "days", 1, 36_500) ? null
                 : "A retention setting is {\"days\": 1–36500}.",
             _ => null,
@@ -65,6 +67,7 @@ public sealed partial class SettingsAdmin(SpmsDbContext db, MasterData master, I
         var scope = p.DeploymentScope ?? "Production";
         if (scope is not ("Training" or "Pilot" or "Production")) return Edit<SettingRow>.Refused(EditOutcome.Invalid, "deploymentScope is Training, Pilot or Production.");
         if (string.IsNullOrWhiteSpace(p.Reason)) return Edit<SettingRow>.Refused(EditOutcome.Invalid, "A change to governed configuration says why (reason).");
+        if (p.SettingKey == OperatingMode.Key && p.PropertyOnly != true) return Edit<SettingRow>.Refused(EditOutcome.Invalid, "The operating mode is a property's own (propertyOnly).");
         return await master.CreateAsync(new SettingRow
         {
             SettingId = Uuid7.New(), PropertyId = p.PropertyOnly == true ? db.Scope.RequireProperty() : null, SettingKey = p.SettingKey,
@@ -105,6 +108,7 @@ public sealed partial class SettingsAdmin(SpmsDbContext db, MasterData master, I
             row.Status = row.EffectiveFrom <= now ? "Active" : "Approved";
             row.ApprovedBy = db.Scope.PrincipalId;
             row.ApprovedAt = now;
+            if (row.Status == "Active") await OperatingMode.ApplyAsync(db, row, ct);
         }
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException e) when (e.InnerException is Npgsql.PostgresException p && MasterData.Map(p) is { } m)
@@ -115,6 +119,26 @@ public sealed partial class SettingsAdmin(SpmsDbContext db, MasterData master, I
         db.ChangeTracker.Clear();
         await tx.CommitAsync(ct);
         return (Outcome.Ok, row, null);
+    }
+}
+
+/// <summary>
+/// The property's operating mode (§53.2; DEC-011) is governed like any policy:
+/// proposed as property.operating_mode, approved by a second person, and
+/// written to core.property when it takes effect. The mode is the default;
+/// who owns each capability is still decided per capability (DEC-001), and a
+/// Marquee-integrated property with no payment decision refuses to guess.
+/// </summary>
+public static class OperatingMode
+{
+    public const string Key = "property.operating_mode";
+
+    public static async Task ApplyAsync(SpmsDbContext db, SettingRow s, CancellationToken ct)
+    {
+        if (s.SettingKey != Key || s.PropertyId is not { } property) return;
+        var mode = JsonDocument.Parse(s.ValueJson).RootElement.GetProperty("mode").GetString()!;
+        await db.Set<PropertyRow>().Where(p => p.PropertyId == property && p.OperatingMode != mode)
+            .ExecuteUpdateAsync(u => u.SetProperty(p => p.OperatingMode, mode).SetProperty(p => p.Version, p => p.Version + 1), ct);
     }
 }
 
@@ -129,7 +153,7 @@ public sealed class SettingActivationJob(SpmsDbContext db, IClock clock) : IProp
         var now = clock.UtcNow;
         var due = await db.Set<SettingRow>().Where(s => s.Status == "Approved" && s.EffectiveFrom <= now).ToListAsync(ct);
         var ended = await db.Set<SettingRow>().Where(s => s.Status == "Active" && s.EffectiveTo != null && s.EffectiveTo <= now).ToListAsync(ct);
-        foreach (var s in due) s.Status = "Active";
+        foreach (var s in due) { s.Status = "Active"; await OperatingMode.ApplyAsync(db, s, ct); }
         foreach (var s in ended) s.Status = "Superseded";
         await db.SaveChangesAsync(ct);
         db.ChangeTracker.Clear();

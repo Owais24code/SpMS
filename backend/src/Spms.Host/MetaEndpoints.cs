@@ -26,6 +26,11 @@ public static class MetaEndpoints
             app.MapGet("/dev/throw", IResult () =>
                 throw new InvalidOperationException("Deliberate failure exercising the error handler."));
 
+            // Runs the owner-side maintenance pass now (partitions ahead, old outbox months).
+            app.MapPost("/dev/maintenance/run", async (IConfiguration config, Workers.MaintenanceOptions options, ILoggerFactory loggers, CancellationToken ct) =>
+                Results.Json(await Workers.DatabaseMaintenance.RunAsync(config.GetConnectionString("SpmsOwner") ?? config.GetConnectionString("Spms") ?? "",
+                    config["Database:MigrationRole"] ?? "spms_owner", options, loggers.CreateLogger("Maintenance"), ct), Json.Options));
+
             // Runs every housekeeping job now, at every property, instead of waiting for its interval.
             app.MapPost("/dev/jobs/run", async (Workers.JobRunner runner, CancellationToken ct) =>
                 Results.Json(new { changed = await runner.RunDueAsync(force: true, ct) }, Json.Options));

@@ -391,6 +391,7 @@ public sealed partial class MessagingService(
             var address = Encoding.UTF8.GetString(protector.Unprotect(m.RecipientAddressCipher, m.KeyVersion, RecipientPurpose));
             m.AttemptCount++;
             var r = await sender.SendAsync(m.Channel, address, t.Subject is null ? null : Render(t.Subject, values), Render(t.BodyTemplate, values), m.IdempotencyKey, ct);
+            Telemetry.Messages.Add(1, new KeyValuePair<string, object?>("channel", m.Channel), new KeyValuePair<string, object?>("outcome", r.Outcome.ToString()));
             switch (r.Outcome)
             {
                 case SendOutcome.Accepted:
@@ -447,6 +448,41 @@ public sealed partial class MessagingService(
             m.Status = "Cancelled";
             return null;
         }, ct, after: m => new { m.ScheduledMessageId, m.Channel, m.Status });
+}
+
+public sealed record MessagingRetention(int Days = 180);
+
+/// <summary>
+/// Once a message is finished and past retention (setting retention.messaging,
+/// 180 days by default), its encrypted address is destroyed; the record that
+/// a message of that template went out on that day stays. A held message is
+/// left whole.
+/// </summary>
+public sealed class MessageRetentionJob(SpmsDbContext db, SettingsReader settings, Spms.Modules.Core.Infrastructure.LegalHolds holds, IClock clock) : IPropertyJob
+{
+    private static readonly string[] Finished = ["Sent", "Delivered", "Failed", "Bounced", "Cancelled", "Expired", "Suppressed"];
+
+    public string Name => "messaging.retention";
+    public TimeSpan Interval => TimeSpan.FromHours(6);
+
+    public async Task<int> RunAsync(CancellationToken ct)
+    {
+        var policy = await settings.GetAsync("retention.messaging", new MessagingRetention(), ct);
+        var cutoff = clock.UtcNow.AddDays(-Math.Max(1, policy.Days));
+        var held = await holds.HeldKeysAsync("messaging.scheduled_message", ct);
+        var due = await db.Set<ScheduledMessageRow>().Where(m => Finished.Contains(m.Status) && m.SendAfter < cutoff && m.KeyVersion != "purged")
+            .Take(500).ToListAsync(ct);
+        var n = 0;
+        foreach (var m in due.Where(m => !held.Contains(m.ScheduledMessageId.ToString())))
+        {
+            m.RecipientAddressCipher = [];
+            m.KeyVersion = "purged";
+            n++;
+        }
+        await db.SaveChangesAsync(ct);
+        db.ChangeTracker.Clear();
+        return n;
+    }
 }
 
 public sealed class ReminderJob(MessagingService messaging) : IPropertyJob

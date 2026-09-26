@@ -91,14 +91,14 @@ const rooms = new Map();
 const guests = new Map();
 function R(name) {
   if (!rooms.has(name)) {
-    if (rooms.size >= 40) throw new Error('the sweep needs more spare rooms than the seed provides');
+    if (rooms.size >= 60) throw new Error('the sweep needs more spare rooms than the seed provides');
     rooms.set(name, U(1001 + rooms.size));
   }
   return rooms.get(name);
 }
 function G(name) {
   if (!guests.has(name)) {
-    if (guests.size >= 40) throw new Error('the sweep needs more walk-in guests than the seed provides');
+    if (guests.size >= 60) throw new Error('the sweep needs more walk-in guests than the seed provides');
     guests.set(name, U(2001 + guests.size));
   }
   return guests.get(name);
@@ -1751,6 +1751,81 @@ await test('a Marquee guest is created once with its mapping and updated afterwa
   const health = await call('GET', '/integrations/outbox', { login: 'ada' });
   eq(200, health.status, health.text);
   ok(typeof health.json.pending === 'number', health.text);
+});
+
+/* ---------------- search, live board, operating mode, operations ---------------- */
+
+await test('universal search finds what the caller may see, and nothing it may not', async () => {
+  eq(422, (await call('GET', '/search?q=A', { login: 'dana' })).status);
+  const desk = await call('GET', '/search?q=AAR000000001', { login: 'dana' });
+  eq(200, desk.status, desk.text);
+  ok(desk.json.hits.some(h => h.type === 'appointment'), 'the desk did not find the booking');
+  const svc = await call('GET', '/search?q=hot%20stone', { login: 'dana' });
+  ok(svc.json.hits.some(h => h.type === 'service' && h.title === 'Hot stone 60'), svc.text);
+  if (FGA) {
+    const provider = await call('GET', '/search?q=AAR000000001', { login: 'lena' });
+    eq(200, provider.status);
+    ok(!provider.json.hits.some(h => h.type === 'appointment' || h.type === 'guest'), 'a provider searched the board');
+  }
+  ok(!desk.text.includes('@'), 'search returned an address');
+});
+
+await test('the live board streams a change made at another desk, and refuses a role with no board', async () => {
+  if (FGA) eq(403, (await fetch(`${BASE}/board/stream`, { headers: { 'X-Spa-Login': 'lena', 'X-Spa-Property': RIVERSIDE } })).status);
+  const ctrl = new AbortController();
+  const res = await fetch(`${BASE}/board/stream`, { headers: { 'X-Spa-Login': 'dana', 'X-Spa-Property': RIVERSIDE }, signal: ctrl.signal });
+  eq(200, res.status);
+  ok(res.headers.get('content-type').startsWith('text/event-stream'), res.headers.get('content-type'));
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = '';
+  const seen = (async () => {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return false;
+      buffer += value;
+      if (buffer.includes('event: change')) return true;
+    }
+  })();
+  await new Promise(r => setTimeout(r, 300));
+  const a = await book('live-1', `${today}T21:15:00Z`);
+  const got = await Promise.race([seen, new Promise(r => setTimeout(() => r(false), 8000))]);
+  ctrl.abort();
+  ok(got, `no change event within 8s (booked ${a.appointmentId})`);
+  ok(!buffer.includes(a.appointmentId) || buffer.includes(`"id":"${a.appointmentId}"`), 'unexpected frame shape');
+  ok(!/guest|alias|start/i.test(buffer.replace('event: ready', '')), 'the stream carried content');
+});
+
+await test('the operating mode is changed by two people and an explicit payment owner still decides', async () => {
+  eq(422, (await call('POST', '/settings', { login: 'ada', body: { settingKey: 'property.operating_mode', value: { mode: 'MarqueeIntegrated' }, reason: 'x' } })).status, 'a tenant-wide mode');
+  const p = await call('POST', '/settings', { login: 'ada', body: { settingKey: 'property.operating_mode', value: { mode: 'MarqueeIntegrated' }, reason: 'Sweep: pilot integration', propertyOnly: true } });
+  eq(201, p.status, p.text);
+  eq('Standalone', (await call('GET', '/properties/current', { login: 'dana' })).json.operatingMode, 'the mode changed before approval');
+  const on = await call('POST', `/settings/${p.json.settingId}/approve`, { login: 'sam', body: {}, headers: { 'If-Match': p.json.eTag } });
+  eq('Active', on.json.status, on.text);
+  try {
+    const now = await call('GET', '/properties/current', { login: 'dana' });
+    eq('MarqueeIntegrated', now.json.operatingMode);
+    // The Marquee case above left an explicit Payment -> Spa decision, which still stands.
+    eq('Spa', now.json.paymentOwner);
+    eq(false, now.json.paymentAmbiguous);
+  } finally {
+    const back = await call('POST', '/settings', { login: 'ada', body: { settingKey: 'property.operating_mode', value: { mode: 'Standalone' }, reason: 'Sweep: back', propertyOnly: true } });
+    await call('POST', `/settings/${back.json.settingId}/approve`, { login: 'sam', body: {}, headers: { 'If-Match': back.json.eTag } });
+  }
+  eq('Standalone', (await call('GET', '/properties/current', { login: 'dana' })).json.operatingMode);
+});
+
+await test('operations: metrics in Prometheus text, database maintenance and housekeeping jobs run clean', async () => {
+  const m = await fetch(`${BASE}/metrics`);
+  eq(200, m.status);
+  const text = await m.text();
+  ok(text.includes('spms_http_requests_total{'), 'no request counter');
+  ok(text.includes('spms_http_request_duration_seconds_bucket{'), 'no duration histogram');
+  ok(!/[0-9a-f]{8}-[0-9a-f]{4}-/.test(text), 'a metric label carried an id');
+  const maint = await call('POST', '/dev/maintenance/run', { scopes: '' });
+  eq(200, maint.status, maint.text);
+  eq(0, maint.json.warnings.length, maint.text);
+  eq(200, (await runJobs()).status);
 });
 
 /* ------------------------------ summary ------------------------------ */

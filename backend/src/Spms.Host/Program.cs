@@ -1,3 +1,4 @@
+using Spms.Host.Operations;
 using Npgsql;
 using Spms.Host;
 using Spms.Host.Authorization;
@@ -39,6 +40,24 @@ var jobs = builder.Configuration.GetSection("Jobs").Get<Spms.Host.Workers.JobOpt
 builder.Services.AddSingleton(jobs);
 builder.Services.AddSingleton<Spms.Host.Workers.JobRunner>();
 if (jobs.Enabled) builder.Services.AddHostedService<Spms.Host.Workers.JobWorker>();
+var maintenance = builder.Configuration.GetSection("Maintenance").Get<Spms.Host.Workers.MaintenanceOptions>() ?? new Spms.Host.Workers.MaintenanceOptions();
+builder.Services.AddSingleton(maintenance);
+if (builder.Environment.IsDevelopment() && !args.Contains("--migrate") && !args.Contains("--maintain"))
+    builder.Services.AddHostedService<Spms.Host.Workers.MaintenanceWorker>();
+
+/* ----------------------------- observability ----------------------------- */
+
+var observability = builder.Configuration.GetSection("Observability").Get<ObservabilityOptions>() ?? new ObservabilityOptions();
+builder.Services.AddSingleton(observability);
+builder.Services.AddSingleton<MetricsCollector>();
+builder.Services.AddHostedService<MetricsSampler>();
+// Structured logs outside Development: one JSON object per line, UTC, with the request's correlation and trace ids.
+var logFormat = observability.LogFormat is { Length: > 0 } f ? f : builder.Environment.IsDevelopment() ? "simple" : "json";
+if (logFormat == "json")
+{
+    builder.Logging.ClearProviders();
+    builder.Logging.AddJsonConsole(o => { o.IncludeScopes = true; o.UseUtcTimestamp = true; o.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ"; });
+}
 
 /* --------------------------------- auth --------------------------------- */
 
@@ -69,7 +88,15 @@ var adminConnection = app.Configuration.GetConnectionString("SpmsAdmin");
 // admin connection is given), then the EF migrations as spms_owner, then exit.
 if (args.Contains("--migrate"))
 {
-    if (!string.IsNullOrWhiteSpace(adminConnection)) await DatabaseBootstrapper.EnsureRolesAsync(adminConnection);
+    if (!string.IsNullOrWhiteSpace(adminConnection))
+    {
+        await DatabaseBootstrapper.EnsureRolesAsync(adminConnection);
+        var logins = new List<(string, string, string[])>();
+        foreach (var (key, roles) in new[] { ("Owner", new[] { "spms_owner" }), ("App", new[] { "spms_app", "spms_outbox" }) })
+            if (app.Configuration[$"Database:Logins:{key}:Name"] is { Length: > 0 } login && app.Configuration[$"Database:Logins:{key}:Password"] is { Length: > 0 } password)
+                logins.Add((login, password, roles));
+        if (logins.Count > 0) await DatabaseBootstrapper.EnsureLoginsAsync(adminConnection, logins);
+    }
     var applied = await DatabaseBootstrapper.MigrateAsync(ownerConnection, SpmsModules.Contributors(),
         app.Configuration["Database:MigrationRole"] ?? "spms_owner");
     app.Logger.LogInformation("Applied {Count} migration(s): {Names}", applied.Count, string.Join(", ", applied));
@@ -92,6 +119,16 @@ if (app.Configuration.GetValue("Database:MigrateOnStartup", false))
 // instance that starts against a drifted schema would be systematically wrong
 // about whatever drifted.
 await SchemaGate.VerifyAsync(app.Services, ownerConnection, app.Logger);
+
+// `Spms.Host --maintain` is the scheduled database housekeeping (partitions
+// ahead, published outbox months dropped), run as the owner, then exit.
+if (args.Contains("--maintain"))
+{
+    var report = await Spms.Host.Workers.DatabaseMaintenance.RunAsync(ownerConnection, app.Configuration["Database:MigrationRole"] ?? "spms_owner",
+        maintenance, app.Logger);
+    app.Logger.LogInformation("Maintenance: {Created} created, {Dropped} dropped, {Warnings} warning(s)", report.Created.Count, report.Dropped.Count, report.Warnings.Count);
+    return;
+}
 
 // `Spms.Host --fga-sync` rewrites every OpenFGA tuple from the tables (after a
 // store restore, or to repair drift), then exits.
@@ -120,7 +157,11 @@ app.Use(async (http, next) =>
     var correlationId = RequestContext.CorrelationOf(http);
     http.Response.Headers["X-Correlation-Id"] = correlationId;
 
-    using var scope = app.Logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId });
+    using var scope = app.Logger.BeginScope(new Dictionary<string, object>
+    {
+        ["CorrelationId"] = correlationId,
+        ["TraceId"] = System.Diagnostics.Activity.Current?.TraceId.ToString() ?? "",
+    });
     try
     {
         await next();
@@ -143,15 +184,20 @@ app.Use(async (http, next) =>
     }
 });
 
+app.UseRequestMetrics();
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapMeta(app.Environment);
+app.MapMetrics(app.Environment, observability);
 
 // Every module endpoint runs inside one scoped request transaction.
 var api = app.MapGroup("").AddEndpointFilter<RequestTransactionFilter>();
 api.MapIdentityEndpoints();
 api.MapSpmsModules();
+api.MapSearch();
+// Streams are outside the request transaction: a connection that lives for hours must not hold one.
+app.MapBoardStream();
 
 await app.RunAsync();
 

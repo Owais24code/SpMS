@@ -3,6 +3,7 @@
   title="Schedule"
   subtitle="Select an appointment and press M to move it with the keyboard — arrow keys shift it, Enter previews. Every move runs the same server preflight before anything commits."
 >
+  @if (store.live()) { <span class="badge badge--ok" data-testid="board-live" title="Changes made elsewhere appear here without reloading">Live</span> }
   <button type="button" class="btn btn--ghost" (click)="clearDay()">Clear day</button>
   <button type="button" class="btn btn--secondary" (click)="printRunSheet()">Print run sheet</button>
   <button type="button" class="btn btn--primary" (click)="newAppointment()">New appointment</button>

@@ -70,7 +70,15 @@ public sealed class InMemoryAppointmentRepository : IAppointmentRepository
     public Task<bool> TryAddAsync(Appointment appointment, CancellationToken ct = default)
     {
         lock (_gate)
+        {
+            // The database's room exclusion, which the real store relies on: under the one lock,
+            // so eight concurrent creates into one room admit exactly one here as they do there.
+            if (appointment.Occupies && appointment.RoomId is { } room && _byId.Values.Any(a =>
+                    a.TenantId == appointment.TenantId && a.PropertyId == appointment.PropertyId && a.RoomId == room && a.Occupies
+                    && a.AppointmentId != appointment.AppointmentId && a.Overlaps(appointment.StartUtc, appointment.EndUtc)))
+                throw new RoomOverlapException(room);
             return Task.FromResult(_byId.TryAdd(Key(appointment.TenantId, appointment.AppointmentId), appointment.Copy()));
+        }
     }
 
     public Task<bool> TryUpdateAsync(Appointment appointment, int expectedRowVersion, CancellationToken ct = default)

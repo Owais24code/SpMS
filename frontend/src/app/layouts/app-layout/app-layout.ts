@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, signal, inject, computed, HostListener } from '@angular/core';
+import { Component, ChangeDetectionStrategy, signal, inject, computed, effect, HostListener } from '@angular/core';
 import { RouterOutlet, RouterLink, RouterLinkActive, Router, NavigationEnd } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { filter, map } from 'rxjs';
@@ -9,6 +9,9 @@ import { ToastService } from '../../core/services/toast.service';
 import { WORKSPACE_NAV, type NavItem } from '../../core/models/nav.model';
 import { SCOPES } from '../../core/models/contract';
 import { FocusTrapDirective } from '../../shared/directives/focus-trap.directive';
+import { OpsApi } from '../../core/api/ops-api';
+import { environment } from '../../../environments/environment';
+import type { SearchHitDto } from '../../core/models/ops';
 
 @Component({
   selector: 'app-app-layout',
@@ -30,6 +33,28 @@ export class AppLayout {
   protected readonly drawerOpen = signal(false);
   protected readonly accountOpen = signal(false);
   protected readonly query = signal('');
+  private readonly ops = inject(OpsApi);
+  /** Records the server found for the query (guests, bookings, orders, staff, services, rooms) — only what this role may see. */
+  protected readonly records = signal<readonly SearchHitDto[]>([]);
+  private searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private readonly searchEffect = effect(() => {
+    const q = this.query().trim();
+    if (this.searchTimer) clearTimeout(this.searchTimer);
+    if (!environment.useRealApi || q.length < 2) { this.records.set([]); return; }
+    this.searchTimer = setTimeout(async () => {
+      try {
+        const r = await this.ops.search(q);
+        if (this.query().trim() === r.q) this.records.set(r.hits);
+      } catch { this.records.set([]); }
+    }, 250);
+  });
+
+  protected openRecord(hit: SearchHitDto): void {
+    this.query.set('');
+    this.records.set([]);
+    void this.router.navigateByUrl(hit.link);
+  }
 
   /** Only the nav entries this role can actually reach. */
   protected readonly groups = computed(() =>
@@ -72,6 +97,7 @@ export class AppLayout {
 
   protected goToFirstMatch(): void {
     const first = this.matches()[0];
+    if (!first && this.records()[0]) { this.openRecord(this.records()[0]); return; }
     if (first) {
       this.router.navigateByUrl(first.path);
       this.query.set('');

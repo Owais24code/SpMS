@@ -26,6 +26,8 @@ public static class AuthorizationSetup
         services.AddSingleton<FgaTupleWriter>();
         services.AddSingleton<FgaReconciler>();
         services.AddSingleton<IOutboxHandler, FgaTupleSyncHandler>();
+        services.AddSingleton<Spms.Host.Operations.BoardFeed>();
+        services.AddSingleton<IOutboxHandler, Spms.Host.Operations.BoardFeedHandler>();
 
         if (fgaConfigured && options.Mode != "Permissive") services.AddSingleton<IAccessDecider, OpenFgaAccessDecider>();
         else services.AddSingleton<IAccessDecider, PermissiveAccessDecider>();
