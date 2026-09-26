@@ -7075,6 +7075,38 @@
      "doc": "CON-006 undo window end"
     },
     {
+     "name": "previous_start",
+     "type": "timestamptz",
+     "nullable": true,
+     "fk": null,
+     "restricted": false,
+     "doc": "where the appointment was before the commit: what an undo restores"
+    },
+    {
+     "name": "previous_provider_id",
+     "type": "uuid",
+     "nullable": true,
+     "fk": "workforce.staff.staff_id",
+     "restricted": false,
+     "doc": ""
+    },
+    {
+     "name": "previous_room_id",
+     "type": "uuid",
+     "nullable": true,
+     "fk": "resources.resource.resource_id",
+     "restricted": false,
+     "doc": ""
+    },
+    {
+     "name": "undone_at",
+     "type": "timestamptz",
+     "nullable": true,
+     "fk": null,
+     "restricted": false,
+     "doc": "set once: a move is undone at most once"
+    },
+    {
      "name": "status",
      "type": "text",
      "nullable": false,

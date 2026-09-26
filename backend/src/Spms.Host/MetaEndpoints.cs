@@ -25,6 +25,10 @@ public static class MetaEndpoints
         {
             app.MapGet("/dev/throw", IResult () =>
                 throw new InvalidOperationException("Deliberate failure exercising the error handler."));
+
+            // Runs every housekeeping job now, at every property, instead of waiting for its interval.
+            app.MapPost("/dev/jobs/run", async (Workers.JobRunner runner, CancellationToken ct) =>
+                Results.Json(new { changed = await runner.RunDueAsync(force: true, ct) }, Json.Options));
         }
     }
 

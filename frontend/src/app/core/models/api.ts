@@ -44,6 +44,15 @@ export interface AppointmentDto {
   /** The same version, quoted, as the ETag header carries it. */
   readonly eTag: string;
   readonly confirmationNumber: string | null;
+  readonly source?: string;
+  readonly priceMinor?: number;
+  readonly currencyCode?: string;
+  readonly visitId?: string | null;
+  /** Set while Held: an online slot hold is released at this instant. */
+  readonly holdExpiresUtc?: string | null;
+  readonly checkedInUtc?: string | null;
+  /** CON-006: set on a committed reassign — the same token undoes it until then. */
+  readonly undoUntilUtc?: string | null;
 }
 
 /** Every collection response is a page; an unbounded list is a latent outage. */
@@ -172,6 +181,8 @@ export interface ReassignRequest {
 export interface TransitionRequest {
   readonly to: string;
   readonly reason?: string | null;
+  /** Recorded on a cancellation: GuestRequest, HoldExpired, VisitCancelled… */
+  readonly reasonCode?: string | null;
 }
 
 export interface AppointmentQuery {

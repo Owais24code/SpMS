@@ -76,6 +76,10 @@ export const ROLE_PRESETS = {
     login: 'sam', roleCode: 'finance', name: 'Sam', property: 'All properties', roleLabel: 'Finance',
     scopes: [SCOPES.read, SCOPES.commerce, SCOPES.reconcile],
   },
+  housekeeping: {
+    login: 'hana', roleCode: 'housekeeping', name: 'Hana', property: 'Riverside Spa', roleLabel: 'Housekeeping',
+    scopes: [SCOPES.read, SCOPES.inventory],
+  },
   platform_admin: {
     login: 'ada', roleCode: 'platform_admin', name: 'Ada', property: 'All properties', roleLabel: 'Platform admin',
     scopes: [SCOPES.read, SCOPES.admin],

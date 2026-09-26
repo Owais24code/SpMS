@@ -17,6 +17,8 @@ import type {
 } from '../models/api';
 import type { ApiProblem } from '../models/api-problem';
 import { IdempotencyKeys, SchedulingApi } from '../api/scheduling-api';
+import { OperationsApi } from '../api/operations-api';
+import type { ArrivalDto } from '../models/operations';
 import {
   browserToday, clockLabel, dayFromAvailability, fallbackDay, hourTicks,
   pctAt, pctForMinutes, spanning, type BusinessDay,
@@ -37,7 +39,7 @@ export type WriteResult<T> =
   | { kind: 'committed'; value: T }
   | { kind: 'stale'; current: T; code: typeof API_ERROR.staleVersion.code }
   | { kind: 'ambiguous'; code: typeof API_ERROR.paymentOutcomeAmbiguous.code }
-  | { kind: 'denied'; code: typeof API_ERROR.authorizationDenied.code };
+  | { kind: 'denied'; code: string };
 
 const now = () =>
   new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' }).format(new Date());
@@ -57,13 +59,22 @@ const now = () =>
 @Injectable({ providedIn: 'root' })
 export class WorkspaceStore {
   private readonly api  = inject(SchedulingApi);
+  private readonly ops  = inject(OperationsApi);
   private readonly keys = inject(IdempotencyKeys);
 
   /** Read once. A flag that could change mid-session would be untestable. */
   private readonly realApi = environment.useRealApi;
 
   // ---- collections ------------------------------------------------------
-  readonly arrivals     = signal<ArrivalRow[]>([...ARRIVALS]);
+  /** The demo arrivals; against the API the list is `arrivalRows` from /front-desk/arrivals. */
+  private readonly demoArrivals = signal<ArrivalRow[]>([...ARRIVALS]);
+  /** The server's arrivals for today, exactly as they arrived. */
+  readonly arrivalRows = signal<readonly ArrivalDto[]>([]);
+  readonly arrivalsProblem = signal<ApiProblem | null>(null);
+
+  readonly arrivals = computed<readonly ArrivalRow[]>(() => this.realApi
+    ? this.arrivalRows().map(toArrivalRow)
+    : this.demoArrivals());
   readonly devices      = signal<DeviceRow[]>([...DEVICES]);
   readonly stock        = signal<StockLine[]>([...STOCK]);
   readonly ledger       = signal<LedgerRow[]>([...LEDGER]);
@@ -71,7 +82,11 @@ export class WorkspaceStore {
   readonly owners       = signal<OwnerRow[]>([...OWNERS]);
   readonly staff        = signal<StaffRow[]>([...STAFF]);
 
-  readonly checkedIn = signal<readonly string[]>([]);
+  private readonly demoCheckedIn = signal<readonly string[]>([]);
+  /** Ids already through the desk: the server's status, or the demo's list. */
+  readonly checkedIn = computed<readonly string[]>(() => this.realApi
+    ? this.arrivalRows().filter((a) => a.status !== 'Confirmed' && a.status !== 'Held').map((a) => a.appointmentId)
+    : this.demoCheckedIn());
   readonly audit     = signal<readonly AuditEntry[]>([]);
 
   /* ---- the board -------------------------------------------------------
@@ -137,7 +152,10 @@ export class WorkspaceStore {
       untracked(() => {
         this.services.set([]);
         this.boardRows.set([]);
+        this.arrivalRows.set([]);
+        this.lastMove.set(null);
         void this.loadBoard();
+        void this.loadArrivals();
       });
     });
   }
@@ -175,55 +193,92 @@ export class WorkspaceStore {
   }
 
   // ---- arrivals ---------------------------------------------------------
+
+  /** Today's arrivals, with the server's readiness (room turnover, intake). */
+  async loadArrivals(): Promise<void> {
+    if (!this.realApi) return;
+    try {
+      const res = await this.ops.arrivals(this.boardDate());
+      this.arrivalRows.set(res.items);
+      this.arrivalsProblem.set(null);
+    } catch (err) {
+      this.arrivalsProblem.set(err as ApiProblem);
+    }
+  }
+
   async checkIn(id: string): Promise<WriteResult<string>> {
+    if (this.realApi) return this.checkInReal(id);
     await this.settle();
     const row = this.arrivals().find((a) => a.id === id);
     if (!row) return { kind: 'denied', code: API_ERROR.authorizationDenied.code };
     if (!(row.formsComplete && row.depositSettled && row.roomReady)) {
       return { kind: 'denied', code: API_ERROR.authorizationDenied.code };
     }
-    this.checkedIn.update((l) => [...l, id]);
+    this.demoCheckedIn.update((l) => [...l, id]);
     this.record('Check-in', `${row.guestAlias} checked in`);
     return { kind: 'committed', value: id };
   }
 
+  /**
+   * The server's check-in: a Confirmed → CheckedIn transition asserting the
+   * version the desk read. The visit arrives with it, server-side.
+   */
+  private async checkInReal(id: string): Promise<WriteResult<string>> {
+    const row = this.arrivalRows().find((a) => a.appointmentId === id);
+    if (!row) return { kind: 'denied', code: API_ERROR.notFound.code };
+    try {
+      await this.api.transition(id, row.rowVersion, { to: 'CheckedIn', reason: null });
+      this.record('Check-in', `${row.guestAlias} checked in`);
+      await Promise.all([this.loadArrivals(), this.loadBoard()]);
+      return { kind: 'committed', value: id };
+    } catch (err) {
+      const p = err as ApiProblem;
+      if (p.code === API_ERROR.staleVersion.code) void this.loadArrivals();
+      return { kind: 'denied', code: p.code };
+    }
+  }
+
+  /** Demo only: a checked-in appointment has no way back to Confirmed on the server. */
+  readonly canUndoCheckIn = !this.realApi;
+
   undoCheckIn(id: string): void {
-    this.checkedIn.update((l) => l.filter((x) => x !== id));
+    if (this.realApi) return;
+    this.demoCheckedIn.update((l) => l.filter((x) => x !== id));
     this.record('Check-in reversed', id);
   }
 
   assignLocker(id: string): void {
     const n = 100 + Math.floor(Math.random() * 300);
-    this.arrivals.update((rows) =>
+    this.demoArrivals.update((rows) =>
       rows.map((r) => (r.id === id ? { ...r, locker: `L-${n}` } : r)));
     this.record('Locker assigned', `${id} → L-${n}`);
   }
 
   settleDeposit(id: string): void {
-    this.arrivals.update((rows) =>
+    this.demoArrivals.update((rows) =>
       rows.map((r) => (r.id === id ? { ...r, depositSettled: true } : r)));
     this.record('Deposit settled', id);
   }
 
   completeForms(id: string): void {
-    this.arrivals.update((rows) =>
+    this.demoArrivals.update((rows) =>
       rows.map((r) => (r.id === id ? { ...r, formsComplete: true } : r)));
     this.record('Forms completed', id);
   }
 
   markRoomReady(id: string): void {
-    this.arrivals.update((rows) =>
+    this.demoArrivals.update((rows) =>
       rows.map((r) => (r.id === id ? { ...r, roomReady: true } : r)));
     this.record('Room ready', id);
   }
 
   addWalkIn(): ArrivalRow {
-    const n = 4900 + this.arrivals().length;
+    const n = 4900 + this.demoArrivals().length;
     const row: ArrivalRow = {
       id: `r-${n}`, guestAlias: `Guest ${n}`, time: now(), service: 'Express 30',
       formsComplete: false, depositSettled: false, roomReady: true, locker: null, pager: null,
     };
-    this.arrivals.update((rows) => [row, ...rows]);
+    this.demoArrivals.update((rows) => [row, ...rows]);
     this.record('Walk-in created', row.guestAlias);
     return row;
   }
@@ -392,6 +447,13 @@ export class WorkspaceStore {
       this.record('Move committed',
         `${pf.proposedStart}–${pf.proposedEnd}${reason ? ' — ' + reason : ''}`,
         pf.conflicts[0]?.code);
+
+      // CON-006: the server says until when this token can undo the move.
+      const until = appointment.undoUntilUtc ? Date.parse(appointment.undoUntilUtc) : NaN;
+      if (Number.isFinite(until) && until > Date.now()) {
+        this.lastMove.set({ appointmentId: id, token, untilMs: until, what: `${pf.proposedStart}–${pf.proposedEnd}` });
+        this.startUndoClock(until);
+      }
 
       await this.loadBoard();
       return { kind: 'committed', appointment };
@@ -610,37 +672,79 @@ export class WorkspaceStore {
 
   private readonly undoable = signal<{ lanes: Lane[]; at: number; what: string } | null>(null);
 
+  /** The last committed reassign the server will still undo, and until when. */
+  private readonly lastMove = signal<{ appointmentId: string; token: string; untilMs: number; what: string } | null>(null);
+  /** Ticks once a second while an undo is open, so canUndo closes on time. */
+  private readonly undoNow = signal(Date.now());
+  private undoTimer: ReturnType<typeof setInterval> | null = null;
+
+  private startUndoClock(untilMs: number): void {
+    if (this.undoTimer !== null) clearInterval(this.undoTimer);
+    this.undoNow.set(Date.now());
+    this.undoTimer = setInterval(() => {
+      this.undoNow.set(Date.now());
+      if (Date.now() >= untilMs && this.undoTimer !== null) {
+        clearInterval(this.undoTimer);
+        this.undoTimer = null;
+      }
+    }, 1000);
+  }
+
   /**
-   * Never true against the real API.
-   *
-   * A local snapshot cannot undo a committed reassign — the server holds the
-   * appointment and has already audited the change. Reverting it is a second
-   * preflight and commit back to the original window, which is a compensating
-   * reschedule and not an undo, so the affordance is not offered rather than
-   * offered and then refused.
+   * Against the API: the server's undo window for the last committed
+   * reassign (the same token undoes it, once). In the demo: a local snapshot.
    */
   readonly canUndo = computed(() => {
-    if (this.realApi) return false;
+    if (this.realApi) {
+      const m = this.lastMove();
+      return !!m && this.undoNow() < m.untilMs;
+    }
     const u = this.undoable();
     return !!u && Date.now() - u.at < UNDO_WINDOW_MS;
+  });
+
+  /** Seconds left on the undo window, for the countdown. */
+  readonly undoSecondsLeft = computed(() => {
+    const m = this.lastMove();
+    return m ? Math.max(0, Math.ceil((m.untilMs - this.undoNow()) / 1000)) : 0;
   });
 
   /**
    * Reverts inside the window. Past it the spec requires an explicit
    * compensating reschedule instead, because downstream systems may already
-   * have acted on the change.
+   * have acted on the change. `refused` carries the server's reason — the
+   * original slot was taken, or the appointment changed since the move.
    */
-  undoLastMove(): 'undone' | 'window-closed' {
+  async undoLastMove(): Promise<{ kind: 'undone' } | { kind: 'window-closed' } | { kind: 'refused'; problem: ApiProblem }> {
+    if (this.realApi) {
+      const m = this.lastMove();
+      if (!m || Date.now() >= m.untilMs) { this.lastMove.set(null); return { kind: 'window-closed' }; }
+      const attempt = `undo|${m.appointmentId}|${m.token}`;
+      try {
+        await this.ops.undoReassign(m.appointmentId, m.token, this.keys.keyFor(attempt));
+        this.keys.forget(attempt);
+        this.lastMove.set(null);
+        this.record('Move undone', m.what);
+        await this.loadBoard();
+        return { kind: 'undone' };
+      } catch (err) {
+        this.keys.forget(attempt);
+        this.lastMove.set(null);
+        const problem = err as ApiProblem;
+        void this.loadBoard();
+        return problem.code === 'PREFLIGHT_EXPIRED' ? { kind: 'window-closed' } : { kind: 'refused', problem };
+      }
+    }
     const u = this.undoable();
-    if (!u || this.realApi) return 'window-closed';
+    if (!u) return { kind: 'window-closed' };
     if (Date.now() - u.at >= UNDO_WINDOW_MS) {
       this.undoable.set(null);
-      return 'window-closed';
+      return { kind: 'window-closed' };
     }
     this.demoLanes.set(u.lanes);
     this.undoable.set(null);
     this.record('Move undone', u.what);
-    return 'undone';
+    return { kind: 'undone' };
   }
 
   // ---- appointments -----------------------------------------------------
@@ -672,7 +776,22 @@ export class WorkspaceStore {
     return a;
   }
 
+  /** Against the API a cancellation is a transition, asserting the version read. */
+  async cancelAppointmentReal(id: string, reasonCode = 'GuestRequest'): Promise<WriteResult<string>> {
+    const row = this.rowFor(id);
+    if (!row) return { kind: 'denied', code: API_ERROR.notFound.code };
+    try {
+      await this.api.transition(id, row.rowVersion, { to: 'Cancelled', reason: null, reasonCode });
+      this.record('Appointment cancelled', row.guestAlias);
+      await Promise.all([this.loadBoard(), this.loadArrivals()]);
+      return { kind: 'committed', value: id };
+    } catch (err) {
+      return { kind: 'denied', code: (err as ApiProblem).code };
+    }
+  }
+
   cancelAppointment(id: string): void {
+    if (this.realApi) { void this.cancelAppointmentReal(id); return; }
     const a = this.demoAppointments().find((x) => x.id === id);
     this.demoAppointments.update((l) => l.filter((x) => x.id !== id));
     this.record('Appointment cancelled', a?.guestAlias ?? id);
@@ -791,7 +910,7 @@ export class WorkspaceStore {
 
   reset(): void {
     this.demoAppointments.set([...APPOINTMENTS]);
-    this.arrivals.set([...ARRIVALS]);
+    this.demoArrivals.set([...ARRIVALS]);
     this.devices.set([...DEVICES]);
     this.stock.set([...STOCK]);
     this.ledger.set([...LEDGER]);
@@ -799,7 +918,7 @@ export class WorkspaceStore {
     this.owners.set([...OWNERS]);
     this.staff.set([...STAFF]);
     this.demoLanes.set(LANES.map((l) => ({ ...l, slots: [...l.slots] })));
-    this.checkedIn.set([]);
+    this.demoCheckedIn.set([]);
     this.ownershipPreflight.set('idle');
     this.record('Demo data reset', 'All screens returned to their starting state');
 
@@ -922,3 +1041,21 @@ const buildLanes = (day: BusinessDay, rows: readonly AppointmentDto[]): Lane[] =
       slots: lane.slots.sort((x, y) => x.startPct - y.startPct),
     }));
 };
+
+/**
+ * A server arrival as the desk table draws it. Deposit is not tracked by
+ * scheduling, so it does not block; intake blocks only while Pending.
+ */
+function toArrivalRow(a: ArrivalDto): ArrivalRow {
+  return {
+    id: a.appointmentId,
+    guestAlias: a.guestAlias,
+    time: a.startLocal.slice(11, 16),
+    service: a.serviceName,
+    formsComplete: a.intake !== 'Pending',
+    depositSettled: a.deposit !== 'Pending',
+    roomReady: a.roomReady,
+    locker: null,
+    pager: null,
+  };
+}

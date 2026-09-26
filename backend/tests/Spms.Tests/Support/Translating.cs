@@ -99,6 +99,24 @@ public sealed class TranslatingRepository(IAppointmentRepository inner, IUnitOfW
     public Task<IReadOnlyList<GuestBusyInterval>> GuestBusyAsync(string tenantId, string guestId, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default) =>
         Tx.Run(uow, async () => (IReadOnlyList<GuestBusyInterval>)(await inner.GuestBusyAsync(TestIds.Of(tenantId), TestIds.Of(guestId), fromUtc, toUtc, ct))
             .Select(b => b with { PropertyId = TestIds.NameOf(b.PropertyId), AppointmentId = TestIds.NameOf(b.AppointmentId) }).ToList());
+
+    // Not wrapped in a unit of work: the deferral belongs to the caller's transaction.
+    public Task DeferRoomExclusionAsync(CancellationToken ct = default) => inner.DeferRoomExclusionAsync(ct);
+
+    public async Task CheckRoomExclusionAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            await inner.CheckRoomExclusionAsync(ct);
+        }
+        catch (RoomOverlapException e)
+        {
+            throw new RoomOverlapException(TestIds.NameOfNullable(e.RoomId), e);
+        }
+    }
+
+    public Task<IReadOnlyList<Appointment>> ListExpiredHoldsAsync(string tenantId, string propertyId, DateTimeOffset nowUtc, int limit, CancellationToken ct = default) =>
+        Tx.Run(uow, async () => (IReadOnlyList<Appointment>)(await inner.ListExpiredHoldsAsync(TestIds.Of(tenantId), TestIds.Of(propertyId), nowUtc, limit, ct)).Select(Map.ToNames).ToList());
 }
 
 public sealed class TranslatingPreflights(IPreflightStore inner, IUnitOfWork uow) : IPreflightStore
@@ -113,8 +131,23 @@ public sealed class TranslatingPreflights(IPreflightStore inner, IUnitOfWork uow
             return r is null ? null : Map.ToNames(r);
         });
 
-    public Task<bool> TryConsumeAsync(string tenantId, string token, DateTimeOffset nowUtc, DateTimeOffset? undoUntilUtc, string? reason, CancellationToken ct = default) =>
-        Tx.Run(uow, () => inner.TryConsumeAsync(TestIds.Of(tenantId), token, nowUtc, undoUntilUtc, reason, ct));
+    public Task<bool> TryConsumeAsync(string tenantId, string token, DateTimeOffset nowUtc, DateTimeOffset? undoUntilUtc, string? reason, Placement? previous, CancellationToken ct = default) =>
+        Tx.Run(uow, () => inner.TryConsumeAsync(TestIds.Of(tenantId), token, nowUtc, undoUntilUtc, reason,
+            previous is null ? null : previous with { ProviderId = TestIds.OfNullable(previous.ProviderId), RoomId = TestIds.OfNullable(previous.RoomId) }, ct));
+
+    public Task<CommittedMove?> FindCommittedAsync(string tenantId, string token, CancellationToken ct = default) =>
+        Tx.Run(uow, async () =>
+        {
+            var m = await inner.FindCommittedAsync(TestIds.Of(tenantId), token, ct);
+            return m is null ? null : m with
+            {
+                AppointmentId = TestIds.NameOf(m.AppointmentId), PropertyId = TestIds.NameOf(m.PropertyId),
+                Previous = m.Previous with { ProviderId = TestIds.NameOfNullable(m.Previous.ProviderId), RoomId = TestIds.NameOfNullable(m.Previous.RoomId) },
+            };
+        });
+
+    public Task<bool> TryMarkUndoneAsync(string tenantId, string token, DateTimeOffset nowUtc, CancellationToken ct = default) =>
+        Tx.Run(uow, () => inner.TryMarkUndoneAsync(TestIds.Of(tenantId), token, nowUtc, ct));
 
     public Task<int> EvictExpiredAsync(DateTimeOffset nowUtc, CancellationToken ct = default) =>
         Tx.Run(uow, () => inner.EvictExpiredAsync(nowUtc, ct));

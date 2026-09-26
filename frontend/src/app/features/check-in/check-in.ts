@@ -1,4 +1,6 @@
-import { Component, ChangeDetectionStrategy, signal, computed, inject } from '@angular/core';
+import { Component, ChangeDetectionStrategy, signal, computed, inject, OnInit } from '@angular/core';
+import { Router } from '@angular/router';
+import { environment } from '../../../environments/environment';
 import { PageHeader } from '../../shared/components/page-header/page-header';
 import { StatePanel } from '../../shared/components/state-panel/state-panel';
 import { HighlightDirective } from '../../shared/directives/highlight.directive';
@@ -15,13 +17,19 @@ type Filter = 'all' | 'ready' | 'blocked' | 'done';
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './check-in.html',
 })
-export class CheckIn {
+export class CheckIn implements OnInit {
   private readonly toast = inject(ToastService);
+  private readonly router = inject(Router);
+  protected readonly live = environment.useRealApi;
   protected readonly store = inject(WorkspaceStore);
 
   protected readonly term = signal('');
   protected readonly filter = signal<Filter>('all');
   protected readonly busy = signal<string | null>(null);
+
+  ngOnInit(): void {
+    void this.store.loadArrivals();
+  }
 
   protected readonly rows = computed(() => {
     const t = this.term().trim().toLowerCase();
@@ -55,14 +63,23 @@ export class CheckIn {
       this.toast.success(
         `${a.guestAlias} checked in`,
         a.locker ? `Locker ${a.locker}.` : 'No locker assigned yet.',
-        () => this.store.undoCheckIn(a.id),
+        this.store.canUndoCheckIn ? () => this.store.undoCheckIn(a.id) : undefined,
       );
+    } else if (res.code === 'STALE_VERSION') {
+      this.toast.warn('This booking just changed', 'The list has been refreshed. Check the row and try again.', res.code);
     } else {
       this.toast.warn('Not ready to check in', 'Resolve the outstanding items on that row first.', res.code);
     }
   }
 
   protected fix(a: ArrivalRow, what: 'forms' | 'deposit' | 'room'): void {
+    if (this.live) {
+      // Against the API these are recorded where they happen, not ticked off here.
+      if (what === 'room') { void this.router.navigateByUrl('/app/turnover'); return; }
+      this.toast.info(what === 'forms' ? 'Intake is completed by the guest' : 'Deposits are taken at payment',
+        what === 'forms' ? 'Send the intake link, or complete it on the provider tablet.' : 'Take the deposit from the booking’s payment panel.');
+      return;
+    }
     if (what === 'forms')   { this.store.completeForms(a.id);  this.toast.success('Forms marked complete', a.guestAlias); }
     if (what === 'deposit') { this.store.settleDeposit(a.id);  this.toast.success('Deposit settled', a.guestAlias); }
     if (what === 'room')    { this.store.markRoomReady(a.id);  this.toast.success('Room marked ready', a.guestAlias); }
@@ -74,6 +91,10 @@ export class CheckIn {
   }
 
   protected walkIn(): void {
+    if (this.live) {
+      void this.router.navigateByUrl('/app/booking');
+      return;
+    }
     const row = this.store.addWalkIn();
     this.toast.info('Walk-in added', `${row.guestAlias} — complete forms and deposit to check in.`);
   }

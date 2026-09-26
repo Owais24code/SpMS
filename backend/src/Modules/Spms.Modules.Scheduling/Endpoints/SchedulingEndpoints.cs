@@ -29,6 +29,8 @@ public static class SchedulingEndpoints
         // MoveProposal and appointment.move would break the stored audit
         // action and the client contract for no behavioural gain.
         app.MapPost("/appointments/{id}/reassign", Reassign);
+        app.MapPost("/appointments/{id}/undo-reassign", UndoReassign);
+        app.MapPost("/schedule/bulk-move", BulkMove);
     }
 
     /* ------------------------------- services ------------------------------ */
@@ -305,7 +307,11 @@ public static class SchedulingEndpoints
                 return Idempotency.Refused(Problem.From(ApiError.NotFound, ctx.CorrelationId));
 
             case SchedulingService.CommitOutcome.Committed:
-                var dto = AppointmentDto.From(outcome.Appointment!);
+                // CON-006: the same token undoes the move until UndoUntilUtc.
+                var dto = AppointmentDto.From(outcome.Appointment!) with
+                {
+                    UndoUntilUtc = outcome.UndoUntilUtc?.ToUniversalTime().ToString("O"),
+                };
                 var json = JsonSerializer.Serialize(dto, Json.Options);
                 http.Response.Headers.ETag = dto.ETag;
                 return new Idempotency.Outcome(200, json, Durable: true,
@@ -317,5 +323,140 @@ public static class SchedulingEndpoints
                 // quietly answering 200 as the old default did.
                 throw new InvalidOperationException($"Unhandled commit outcome {outcome.Outcome}.");
         }
+    }
+
+    /* --------------------------------- undo -------------------------------- */
+
+    private static async Task<IResult> UndoReassign(
+        HttpContext http, SchedulingService scheduling, IIdempotencyStore idem, IAppointmentRepository repo,
+        AppointmentAccess access, IClock clock, ILoggerFactory loggers, string id, CancellationToken ct)
+    {
+        var ctx = RequestContext.From(http);
+        if (Guard.RequireScope(ctx, SpaScopes.Schedule) is { } denied) return denied;
+
+        var (body, readFailure) = await Guard.ReadBodyAsync(http, ctx, ct);
+        if (body is null) return readFailure!;
+
+        return await Idempotency.RunAsync(
+            http, idem, ctx, loggers.CreateLogger(typeof(SchedulingEndpoints)), "appointments.undo-reassign", body, clock.UtcNow,
+            async () =>
+            {
+                if (!Guard.TryParse<UndoRequest>(body, ctx, out var req, out var parseFailure)) return Idempotency.Refused(parseFailure!);
+                if (string.IsNullOrWhiteSpace(req!.Token))
+                    return Idempotency.Refused(Problem.From(ApiError.ValidationFailed, ctx.CorrelationId,
+                        "token is required: the one the reassign was committed with.",
+                        extensions: Problem.Ext("field_violations", new[] { new { field = "token", rule = "required" } })));
+
+                var target = await repo.GetAsync(ctx.Tenant(), ctx.Property(), id, ct);
+                if (target is not null && await access.AppointmentAsync(ctx, target, "can_reassign", ct, strong: true) is { } refused)
+                    return Idempotency.Refused(refused);
+
+                var r = await scheduling.UndoMoveAsync(ctx.Tenant(), ctx.Property(), id, req.Token!, ctx.CorrelationId, ct);
+                switch (r.Outcome)
+                {
+                    case SchedulingService.UndoOutcome.TokenInvalid:
+                        return Idempotency.Refused(Problem.From(ApiError.NotFound, ctx.CorrelationId, "No committed move matches that token."));
+                    case SchedulingService.UndoOutcome.AppointmentMismatch:
+                        return Idempotency.Refused(Problem.From(ApiError.ValidationFailed, ctx.CorrelationId,
+                            "This token committed a different appointment than the one in the URL."));
+                    case SchedulingService.UndoOutcome.WindowClosed:
+                        return Idempotency.Refused(Problem.From(ApiError.PreflightExpired, ctx.CorrelationId,
+                            "The undo window has closed, or this move was already undone. Reschedule it explicitly instead."));
+                    case SchedulingService.UndoOutcome.NotFound:
+                        return Idempotency.Refused(Problem.From(ApiError.NotFound, ctx.CorrelationId));
+                    case SchedulingService.UndoOutcome.StaleVersion:
+                        return Idempotency.Refused(Problem.From(ApiError.StaleVersion, ctx.CorrelationId,
+                            "The appointment changed after the move; undoing it now would overwrite that change.",
+                            extensions: r.Appointment is null ? null : Problem.Ext("current", AppointmentDto.From(r.Appointment))));
+                    case SchedulingService.UndoOutcome.NotReschedulable:
+                        return Idempotency.Refused(Problem.From(ApiError.ValidationFailed, ctx.CorrelationId,
+                            $"A {r.Appointment!.Status} appointment cannot be moved back."));
+                    case SchedulingService.UndoOutcome.HardConflict:
+                        return Idempotency.Refused(Problem.From(ApiError.HardConflict, ctx.CorrelationId,
+                            "The original slot is no longer free.",
+                            extensions: Problem.Ext("conflicts", ConflictDto.FromAll(r.Conflicts))));
+                    case SchedulingService.UndoOutcome.Undone:
+                        var dto = AppointmentDto.From(r.Appointment!);
+                        var json = JsonSerializer.Serialize(dto, Json.Options);
+                        http.Response.Headers.ETag = dto.ETag;
+                        return new Idempotency.Outcome(200, json, Durable: true, Results.Content(json, "application/json", statusCode: 200));
+                    default:
+                        throw new InvalidOperationException($"Unhandled undo outcome {r.Outcome}.");
+                }
+            }, ct);
+    }
+
+    /* ------------------------------- bulk move ----------------------------- */
+
+    private static async Task<IResult> BulkMove(
+        HttpContext http, SchedulingService scheduling, IIdempotencyStore idem, AppointmentAccess access,
+        SchedulingOptions options, IClock clock, ILoggerFactory loggers, CancellationToken ct)
+    {
+        var ctx = RequestContext.From(http);
+        if (Guard.RequireScope(ctx, SpaScopes.Schedule) is { } denied) return denied;
+        if (await access.PropertyAsync(ctx, "can_bulk_move", ct) is { } refused) return refused;
+
+        var (body, readFailure) = await Guard.ReadBodyAsync(http, ctx, ct);
+        if (body is null) return readFailure!;
+
+        return await Idempotency.RunAsync(
+            http, idem, ctx, loggers.CreateLogger(typeof(SchedulingEndpoints)), "schedule.bulk-move", body, clock.UtcNow,
+            async () =>
+            {
+                if (!Guard.TryParse<BulkMoveRequest>(body, ctx, out var req, out var parseFailure)) return Idempotency.Refused(parseFailure!);
+
+                var moves = req!.Moves ?? [];
+                var violations = new List<object>();
+                if (moves.Count == 0) violations.Add(new { field = "moves", rule = "required" });
+                if (moves.Count > options.BulkMoveLimit) violations.Add(new { field = "moves", rule = $"at_most_{options.BulkMoveLimit}" });
+                if (req.Reason is { Length: > 1000 }) violations.Add(new { field = "reason", rule = "max_length_1000" });
+
+                var items = new List<SchedulingService.BulkItem>();
+                for (var i = 0; i < moves.Count; i++)
+                {
+                    var m = moves[i];
+                    if (string.IsNullOrWhiteSpace(m.AppointmentId)) violations.Add(new { field = $"moves[{i}].appointmentId", rule = "required" });
+                    if (!Guard.TryParseInstant(m.StartUtc, out var start) || !Guard.IsSaneInstant(start))
+                        violations.Add(new { field = $"moves[{i}].startUtc", rule = "iso8601_required" });
+                    if (m.FromRowVersion is null or < 1) violations.Add(new { field = $"moves[{i}].fromRowVersion", rule = "required" });
+                    items.Add(new SchedulingService.BulkItem(m.AppointmentId ?? "", start, m.ProviderId, m.RoomId, m.FromRowVersion ?? 0));
+                }
+                if (violations.Count > 0)
+                    return Idempotency.Refused(Problem.From(ApiError.ValidationFailed, ctx.CorrelationId,
+                        "One or more fields were not accepted.", extensions: Problem.Ext("field_violations", violations)));
+
+                if (!string.IsNullOrWhiteSpace(req.Reason) && await access.PropertyAsync(ctx, "can_override_soft_conflict", ct) is { } noOverride)
+                    return Idempotency.Refused(noOverride);
+
+                var dryRun = req.DryRun ?? false;
+                var r = await scheduling.BulkMoveAsync(ctx.Tenant(), ctx.Property(), items, req.Reason, dryRun, ctx.CorrelationId, ct);
+                var response = BulkMoveResponse.From(r);
+                var ext = Problem.Ext("items", response.Items);
+                switch (r.Outcome)
+                {
+                    case SchedulingService.BulkOutcome.Evaluated:
+                        return new Idempotency.Outcome(200, "", Durable: false, Results.Json(response, Json.Options));
+                    case SchedulingService.BulkOutcome.Committed:
+                        var json = JsonSerializer.Serialize(response, Json.Options);
+                        return new Idempotency.Outcome(200, json, Durable: true, Results.Content(json, "application/json", statusCode: 200));
+                    case SchedulingService.BulkOutcome.Invalid:
+                        return Idempotency.Refused(Problem.From(ApiError.ValidationFailed, ctx.CorrelationId,
+                            "Some appointments cannot be moved (unknown, finished or listed twice). Nothing moved.", extensions: ext));
+                    case SchedulingService.BulkOutcome.StaleVersion:
+                        return Idempotency.Refused(Problem.From(ApiError.StaleVersion, ctx.CorrelationId,
+                            "Some appointments changed since you read them. Nothing moved.", extensions: ext));
+                    case SchedulingService.BulkOutcome.HardConflict:
+                        return Idempotency.Refused(Problem.From(ApiError.HardConflict, ctx.CorrelationId,
+                            "At least one move crosses a hard conflict. Nothing moved.", extensions: ext));
+                    case SchedulingService.BulkOutcome.ReasonRequired:
+                        return Idempotency.Refused(Problem.From(ApiError.SoftConflictApproval, ctx.CorrelationId,
+                            "These moves cross soft conflicts. Supply a reason; it is audited. Nothing moved yet.", extensions: ext));
+                    case SchedulingService.BulkOutcome.BoardChanged:
+                        return Idempotency.Refused(Problem.From(ApiError.HardConflict, ctx.CorrelationId,
+                            "The board changed while the moves were applied. Nothing moved; evaluate again.", retryable: true, extensions: ext));
+                    default:
+                        throw new InvalidOperationException($"Unhandled bulk outcome {r.Outcome}.");
+                }
+            }, ct);
     }
 }

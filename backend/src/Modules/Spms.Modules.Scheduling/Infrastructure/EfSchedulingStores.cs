@@ -185,6 +185,44 @@ public sealed class EfAppointmentRepository(SpmsDbContext db) : IAppointmentRepo
         return rows.Select(r => new GuestBusyInterval(Ids.Of(r.PropertyId), Ids.Of(r.AppointmentId), r.StartAt, r.EndAt)).ToList();
     }
 
+    public Task DeferRoomExclusionAsync(CancellationToken ct = default) =>
+        db.Database.ExecuteSqlRawAsync("SET CONSTRAINTS scheduling.appointment_room_no_overlap DEFERRED", ct);
+
+    public async Task CheckRoomExclusionAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync("SET CONSTRAINTS scheduling.appointment_room_no_overlap IMMEDIATE", ct);
+        }
+        catch (PostgresException e) when (e.SqlState == PostgresErrors.ExclusionViolation)
+        {
+            throw new RoomOverlapException(RoomFrom(e), e);
+        }
+    }
+
+    /// <summary>The room id from the exclusion's detail: "Key (tenant_id, property_id, room_id, ...)=(t, p, r, ...)".</summary>
+    private static string? RoomFrom(PostgresException e)
+    {
+        var d = e.Detail ?? "";
+        var eq = d.IndexOf(")=(", StringComparison.Ordinal);
+        if (eq < 0) return null;
+        var values = d[(eq + 3)..].Split(',', StringSplitOptions.TrimEntries);
+        return values.Length >= 3 && Guid.TryParse(values[2], out var r) ? Ids.Of(r) : null;
+    }
+
+    public async Task<IReadOnlyList<Appointment>> ListExpiredHoldsAsync(
+        string tenantId, string propertyId, DateTimeOffset nowUtc, int limit, CancellationToken ct = default)
+    {
+        if (!Ids.TryParse(tenantId, out var tid) || !Ids.TryParse(propertyId, out var pid)) return [];
+        var now = nowUtc.ToUniversalTime();
+        var rows = await Query(tid, pid)
+            .Where(h => h.Row.Status == AppointmentStatuses.Held && h.Row.HoldExpiresAt <= now)
+            .OrderBy(h => h.Row.HoldExpiresAt)
+            .Take(limit)
+            .ToListAsync(ct);
+        return rows.Select(ToDomain).ToList();
+    }
+
     private static Appointment ToDomain(Hit h)
     {
         var r = h.Row;
@@ -300,10 +338,13 @@ public sealed class EfPreflightStore(SpmsDbContext db) : IPreflightStore
     }
 
     public async Task<bool> TryConsumeAsync(string tenantId, string token, DateTimeOffset nowUtc,
-        DateTimeOffset? undoUntilUtc, string? reason, CancellationToken ct = default)
+        DateTimeOffset? undoUntilUtc, string? reason, Placement? previous, CancellationToken ct = default)
     {
         var hash = HashToken(token);
         var principal = db.Scope.PrincipalId;
+        var previousStart = previous?.StartUtc.ToUniversalTime();
+        var previousProvider = Ids.Nullable(previous?.ProviderId);
+        var previousRoom = Ids.Nullable(previous?.RoomId);
         // Conditional on status Open: in a race exactly one caller moves it.
         var n = await db.Set<ScheduleChangeProposalRow>()
             .Where(p => p.TokenHash == hash && p.Status == ScheduleChangeProposalStatuses.Open)
@@ -312,6 +353,35 @@ public sealed class EfPreflightStore(SpmsDbContext db) : IPreflightStore
                 .SetProperty(p => p.CommittedAt, nowUtc.ToUniversalTime())
                 .SetProperty(p => p.UndoUntil, undoUntilUtc)
                 .SetProperty(p => p.OverrideReason, reason)
+                .SetProperty(p => p.PreviousStart, previousStart)
+                .SetProperty(p => p.PreviousProviderId, previousProvider)
+                .SetProperty(p => p.PreviousRoomId, previousRoom)
+                .SetProperty(p => p.Version, p => p.Version + 1)
+                .SetProperty(p => p.UpdatedBy, principal), ct);
+        return n == 1;
+    }
+
+    public async Task<CommittedMove?> FindCommittedAsync(string tenantId, string token, CancellationToken ct = default)
+    {
+        var hash = HashToken(token);
+        var row = await db.Set<ScheduleChangeProposalRow>().AsNoTracking()
+            .SingleOrDefaultAsync(p => p.TokenHash == hash && p.Status == ScheduleChangeProposalStatuses.Committed, ct);
+        if (row is null || row.PreviousStart is not { } start) return null;
+        return new CommittedMove(Ids.Of(row.AppointmentId), Ids.Of(row.PropertyId), row.FromVersion + 1,
+            new Placement(start.ToUniversalTime(), Ids.Of(row.PreviousProviderId), Ids.Of(row.PreviousRoomId)),
+            row.UndoUntil?.ToUniversalTime(), row.UndoneAt?.ToUniversalTime());
+    }
+
+    public async Task<bool> TryMarkUndoneAsync(string tenantId, string token, DateTimeOffset nowUtc, CancellationToken ct = default)
+    {
+        var hash = HashToken(token);
+        var now = nowUtc.ToUniversalTime();
+        var principal = db.Scope.PrincipalId;
+        var n = await db.Set<ScheduleChangeProposalRow>()
+            .Where(p => p.TokenHash == hash && p.Status == ScheduleChangeProposalStatuses.Committed
+                        && p.UndoneAt == null && p.UndoUntil > now)
+            .ExecuteUpdateAsync(u => u
+                .SetProperty(p => p.UndoneAt, now)
                 .SetProperty(p => p.Version, p => p.Version + 1)
                 .SetProperty(p => p.UpdatedBy, principal), ct);
         return n == 1;

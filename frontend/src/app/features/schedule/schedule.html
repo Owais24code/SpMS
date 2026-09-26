@@ -155,7 +155,7 @@
 
   @if (store.canUndo()) {
     <div class="undobar" role="status">
-      <span>Last move can still be reverted.</span>
+      <span>Last move can still be reverted@if (store.undoSecondsLeft() > 0) { <span class="numeric"> ({{ store.undoSecondsLeft() }}s)</span> }.</span>
       <button type="button" class="btn btn--ghost" (click)="undo()">Undo</button>
     </div>
   }

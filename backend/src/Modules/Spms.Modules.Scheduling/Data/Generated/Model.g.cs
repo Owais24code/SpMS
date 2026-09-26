@@ -110,6 +110,10 @@ public sealed class SchedulingModelContributor : IModelContributor
             e.Property(x => x.ExpiresAt).HasColumnName("expires_at").HasColumnType("timestamp with time zone").IsRequired();
             e.Property(x => x.CommittedAt).HasColumnName("committed_at").HasColumnType("timestamp with time zone");
             e.Property(x => x.UndoUntil).HasColumnName("undo_until").HasColumnType("timestamp with time zone");
+            e.Property(x => x.PreviousStart).HasColumnName("previous_start").HasColumnType("timestamp with time zone");
+            e.Property(x => x.PreviousProviderId).HasColumnName("previous_provider_id").HasColumnType("uuid");
+            e.Property(x => x.PreviousRoomId).HasColumnName("previous_room_id").HasColumnType("uuid");
+            e.Property(x => x.UndoneAt).HasColumnName("undone_at").HasColumnType("timestamp with time zone");
             e.Property(x => x.Status).HasColumnName("status").HasColumnType("text").IsRequired();
             e.Property(x => x.Version).HasColumnName("version").HasColumnType("integer").IsRequired().IsConcurrencyToken();
             e.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamp with time zone").IsRequired().HasDefaultValueSql("now()");

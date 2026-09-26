@@ -1026,6 +1026,179 @@ await test('recording a guest contact needs the front desk relationship, not jus
   if (process.env.SPMS_SWEEP_FGA === '1') eq(403, r.status, 'OpenFGA did not refuse a non-front-desk guest write');
 });
 
+/* ---------------------- scheduling operations (batch 3) ---------------------- */
+
+async function book(name, startUtc, { room = name, guest = name, provider, service = SVC.swedish, hold, visitId } = {}) {
+  const r = await call('POST', '/appointments', {
+    body: { guestId: G(`g-${guest}`), guestAlias: name, serviceId: service, startUtc, providerId: provider,
+            roomId: R(`r-${room}`), holdMinutes: hold, visitId },
+  });
+  if (r.status !== 201) throw new Error(`booking ${name}: ${r.status} ${r.text}`);
+  return r.json;
+}
+
+await test('a committed reassign carries an undo window, and the same token undoes it once', async () => {
+  const a = await book('undo', `${today}T22:00:00Z`);
+  const pf = await call('POST', '/schedule/preflight', {
+    body: { appointmentId: a.appointmentId, startUtc: `${today}T23:00:00Z`, fromRowVersion: a.rowVersion },
+  });
+  const moved = await call('POST', `/appointments/${a.appointmentId}/reassign`, { body: { token: pf.json.token } });
+  eq(200, moved.status);
+  ok(moved.json.undoUntilUtc && Date.parse(moved.json.undoUntilUtc) > Date.now(), 'no undo window on the committed move');
+
+  const undo = await call('POST', `/appointments/${a.appointmentId}/undo-reassign`, { body: { token: pf.json.token } });
+  eq(200, undo.status, undo.text);
+  eq(a.startUtc, undo.json.startUtc);
+  eq(3, undo.json.rowVersion);
+  eq(409, (await call('POST', `/appointments/${a.appointmentId}/undo-reassign`, { body: { token: pf.json.token } })).status);
+});
+
+await test('undo needs the committing token and the scheduling scope', async () => {
+  const a = await book('undo2', `${today}T22:00:00Z`);
+  eq(404, (await call('POST', `/appointments/${a.appointmentId}/undo-reassign`, { body: { token: 'pf_nothing' } })).status);
+  eq(403, (await call('POST', `/appointments/${a.appointmentId}/undo-reassign`, { login: 'dana', body: { token: 'pf_nothing' } })).status);
+});
+
+await test('a bulk move swaps two rooms atomically; a dry run changes nothing', async () => {
+  const a = await book('bulk-a', `${today}T22:00:00Z`, { room: 'bulk-a' });
+  const b = await book('bulk-b', `${today}T22:00:00Z`, { room: 'bulk-b', service: SVC.hotstone });
+  const moves = [
+    { appointmentId: a.appointmentId, startUtc: a.startUtc, roomId: b.roomId, fromRowVersion: 1 },
+    { appointmentId: b.appointmentId, startUtc: b.startUtc, roomId: a.roomId, fromRowVersion: 1 },
+  ];
+  const dry = await call('POST', '/schedule/bulk-move', { body: { moves, dryRun: true } });
+  eq(200, dry.status, dry.text);
+  eq('Evaluated', dry.json.outcome);
+  eq(true, dry.json.commitAllowed);
+  eq(1, (await call('GET', `/appointments/${a.appointmentId}`)).json.rowVersion);
+
+  const r = await call('POST', '/schedule/bulk-move', { body: { moves }, headers: { 'Idempotency-Key': `bulk-${Date.now()}` } });
+  eq(200, r.status, r.text);
+  eq('Committed', r.json.outcome);
+  eq(b.roomId, (await call('GET', `/appointments/${a.appointmentId}`)).json.roomId);
+  eq(a.roomId, (await call('GET', `/appointments/${b.appointmentId}`)).json.roomId);
+});
+
+await test('a bulk move into one room is refused whole, and a stale item is 412', async () => {
+  const a = await book('bulk-c', `${today}T22:00:00Z`, { room: 'bulk-c' });
+  const b = await book('bulk-d', `${today}T22:00:00Z`, { room: 'bulk-d', service: SVC.hotstone });
+  const clash = await call('POST', '/schedule/bulk-move', { body: { moves: [
+    { appointmentId: a.appointmentId, startUtc: a.startUtc, roomId: R('r-bulk-e'), fromRowVersion: 1 },
+    { appointmentId: b.appointmentId, startUtc: b.startUtc, roomId: R('r-bulk-e'), fromRowVersion: 1 },
+  ] } });
+  eq(409, clash.status);
+  eq('HARD_CONFLICT', clash.json.code);
+  ok(clash.json.items.every(i => i.conflicts.some(c => c.code === 'CON-002')), 'both items should carry CON-002');
+
+  const stale = await call('POST', '/schedule/bulk-move', { body: { moves: [
+    { appointmentId: a.appointmentId, startUtc: a.startUtc, fromRowVersion: 9 },
+  ] } });
+  eq(412, stale.status);
+  eq(403, (await call('POST', '/schedule/bulk-move', { login: 'dana', body: { moves: [] } })).status);
+});
+
+await test('a visit is created, its guest checking in arrives it, and it closes once treatment is over', async () => {
+  const v = await call('POST', '/visits', { login: 'dana', body: { guestId: G('g-visit'), visitDate: today, visitType: 'DayGuest' } });
+  eq(201, v.status, v.text);
+  eq('Planned', v.json.status);
+  const a = await book('visit', `${today}T22:00:00Z`, { guest: 'visit', visitId: v.json.visitId });
+
+  const ci = await call('POST', `/appointments/${a.appointmentId}/transitions`, {
+    login: 'dana', body: { to: 'CheckedIn' }, headers: { 'If-Match': '"1"' },
+  });
+  eq(200, ci.status, ci.text);
+  const arrived = await call('GET', `/visits/${v.json.visitId}`, { login: 'dana' });
+  eq('Arrived', arrived.json.status);
+  ok(arrived.json.actualArrivalUtc, 'arrival time not recorded');
+
+  const refused = await call('POST', `/visits/${v.json.visitId}/transitions`, {
+    login: 'dana', body: { to: 'Closed' }, headers: { 'If-Match': arrived.json.eTag },
+  });
+  eq(409, refused.status, 'closed a visit with a guest still checked in');
+
+  const list = await call('GET', `/visits?date=${today}`, { login: 'dana' });
+  eq(200, list.status);
+  ok(list.json.items.some(x => x.visitId === v.json.visitId));
+});
+
+await test('cancelling a visit cancels its bookings; a transition needs If-Match', async () => {
+  const v = await call('POST', '/visits', { login: 'dana', body: { guestId: G('g-visit2'), visitDate: today, visitType: 'Group' } });
+  const a = await book('visit2', `${today}T22:00:00Z`, { guest: 'visit2', visitId: v.json.visitId });
+  eq(422, (await call('POST', `/visits/${v.json.visitId}/transitions`, { login: 'dana', body: { to: 'Cancelled' } })).status);
+  const c = await call('POST', `/visits/${v.json.visitId}/transitions`, {
+    login: 'dana', body: { to: 'Cancelled', reason: 'Party called off' }, headers: { 'If-Match': '"1"' },
+  });
+  eq(200, c.status, c.text);
+  eq('Cancelled', (await call('GET', `/appointments/${a.appointmentId}`)).json.status);
+});
+
+await test('the waitlist offers a freed slot and the guest is accepted onto it', async () => {
+  const add = await call('POST', '/waitlist', { login: 'dana', body: {
+    guestId: G('g-wait'), serviceId: SVC.swedish, earliestUtc: `${today}T20:00:00Z`, latestUtc: `${today}T23:59:00Z`,
+  } });
+  eq(201, add.status, add.text);
+  const fits = await call('GET', `/waitlist/candidates?startUtc=${today}T21:00:00Z&endUtc=${today}T22:00:00Z&serviceId=${SVC.swedish}`, { login: 'dana' });
+  ok(fits.json.some(w => w.waitlistId === add.json.waitlistId), 'the waiting guest is not a candidate');
+  const offer = await call('POST', `/waitlist/${add.json.waitlistId}/offer`, { login: 'dana', body: { minutes: 20 }, headers: { 'If-Match': '"1"' } });
+  eq(200, offer.status, offer.text);
+  eq('Offered', offer.json.status);
+  const appt = await book('wait', `${today}T21:00:00Z`, { guest: 'wait' });
+  const acc = await call('POST', `/waitlist/${add.json.waitlistId}/accept`, {
+    login: 'dana', body: { appointmentId: appt.appointmentId }, headers: { 'If-Match': offer.json.eTag },
+  });
+  eq(200, acc.status, acc.text);
+  eq('Accepted', acc.json.status);
+});
+
+await test('completing a treatment leaves a turnover for housekeeping, and the desk sees the room not ready', async () => {
+  const a = await book('turn', `${today}T22:00:00Z`, { room: 'turn' });
+  let v = 1;
+  for (const to of ['CheckedIn', 'Ready', 'InService', 'Completed']) {
+    const r = await call('POST', `/appointments/${a.appointmentId}/transitions`, { body: { to }, headers: { 'If-Match': `"${v}"` } });
+    eq(200, r.status, `${to}: ${r.text}`);
+    v = r.json.rowVersion;
+  }
+  const open = await call('GET', '/turnaround', { login: 'hana' });
+  eq(200, open.status, open.text);
+  const task = open.json.items.find(t => t.appointmentId === a.appointmentId);
+  ok(task, 'no turnover task for the completed treatment');
+  eq('Turnover', task.taskType);
+
+  // The front desk may read readiness but not complete it.
+  eq(200, (await call('GET', '/turnaround', { login: 'dana' })).status);
+  const deskTry = await call('POST', `/turnaround/${task.turnaroundTaskId}/complete`, {
+    login: 'dana', body: { result: 'Pass' }, headers: { 'If-Match': task.eTag },
+  });
+  eq(403, deskTry.status);
+
+  const done = await call('POST', `/turnaround/${task.turnaroundTaskId}/complete`, {
+    login: 'hana', body: { result: 'Pass', checklistCode: 'TURN-STD' }, headers: { 'If-Match': task.eTag },
+  });
+  eq(200, done.status, done.text);
+  eq('Completed', done.json.status);
+  eq(422, (await call('POST', `/turnaround/${task.turnaroundTaskId}/complete`, {
+    login: 'hana', body: { result: 'Great' }, headers: { 'If-Match': done.json.eTag } })).status);
+});
+
+await test('the desk arrivals list carries room readiness and intake', async () => {
+  const r = await call('GET', `/front-desk/arrivals?date=${today}`, { login: 'dana' });
+  eq(200, r.status, r.text);
+  ok(Array.isArray(r.json.items));
+  for (const i of r.json.items) {
+    ok(typeof i.roomReady === 'boolean', 'roomReady missing');
+    ok(['NotRequired', 'Pending', 'Complete'].includes(i.intake), `intake ${i.intake}`);
+  }
+});
+
+await test('a hold is released by the expiry job once it runs out (dev job trigger)', async () => {
+  const h = await book('hold', `${today}T22:30:00Z`, { hold: 1 });
+  eq('Held', h.status);
+  const run = await call('POST', '/dev/jobs/run', { scopes: '' });
+  eq(200, run.status);
+  // Still inside its minute: not released.
+  eq('Held', (await call('GET', `/appointments/${h.appointmentId}`)).json.status);
+});
+
 /* ------------------------------ summary ------------------------------ */
 
 console.log();

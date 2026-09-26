@@ -26,6 +26,8 @@ const workspaceRoutes: Routes = [
   { path: 'treatments',     title: 'Treatments — SpMS',     canActivate: [scopeGuard(SCOPES.healthRestricted)],      loadComponent: () => import('./features/treatments/treatments').then((m) => m.Treatments) },
   { path: 'booking',        title: 'Booking — SpMS',        loadComponent: () => import('./features/booking/booking').then((m) => m.Booking) },
   { path: 'appointments',   title: 'Appointments — SpMS',   loadComponent: () => import('./features/appointments/appointments').then((m) => m.Appointments) },
+  { path: 'waitlist',       title: 'Waitlist — SpMS',       canActivate: [scopeGuard(SCOPES.read)],       loadComponent: () => import('./features/waitlist/waitlist').then((m) => m.Waitlist) },
+  { path: 'turnover',       title: 'Room turnover — SpMS',  canActivate: [scopeGuard(SCOPES.read)],       loadComponent: () => import('./features/turnover/turnover').then((m) => m.Turnover) },
   { path: 'messaging',      title: 'Messaging — SpMS',      canActivate: [scopeGuard(SCOPES.messaging)], loadComponent: () => import('./features/messaging/messaging').then((m) => m.Messaging) },
   { path: 'inventory',      title: 'Inventory — SpMS',      canActivate: [scopeGuard(SCOPES.inventory)], loadComponent: () => import('./features/inventory/inventory').then((m) => m.Inventory) },
   { path: 'devices',        title: 'Devices — SpMS',        canActivate: [scopeGuard(SCOPES.device)],   loadComponent: () => import('./features/devices/devices').then((m) => m.Devices) },

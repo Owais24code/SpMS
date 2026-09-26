@@ -50,6 +50,52 @@ public interface IAppointmentRepository
     /// </summary>
     Task<IReadOnlyList<GuestBusyInterval>> GuestBusyAsync(
         string tenantId, string guestId, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default);
+
+    /// <summary>
+    /// Defers the room exclusion (CON-002) to <see cref="CheckRoomExclusionAsync"/>
+    /// for the rest of the transaction, so a bulk move can swap two rooms.
+    /// </summary>
+    Task DeferRoomExclusionAsync(CancellationToken ct = default);
+
+    /// <summary>Checks the deferred room exclusion now. Throws <see cref="RoomOverlapException"/>.</summary>
+    Task CheckRoomExclusionAsync(CancellationToken ct = default);
+
+    /// <summary>Held bookings whose hold ran out, oldest first.</summary>
+    Task<IReadOnlyList<Appointment>> ListExpiredHoldsAsync(
+        string tenantId, string propertyId, DateTimeOffset nowUtc, int limit, CancellationToken ct = default);
+}
+
+/// <summary>Where an appointment sits: start, provider, room. A null means none.</summary>
+public sealed record Placement(DateTimeOffset StartUtc, string? ProviderId, string? RoomId);
+
+/// <summary>A committed reassign as the undo path needs it (CON-006).</summary>
+public sealed record CommittedMove(
+    string AppointmentId, string PropertyId, int CommittedRowVersion, Placement Previous,
+    DateTimeOffset? UndoUntilUtc, DateTimeOffset? UndoneUtc);
+
+/// <summary>
+/// What else changes when an appointment changes state, in the same
+/// transaction: the visit arrives when its first guest checks in, and a
+/// completed treatment leaves its room needing a turnover.
+/// </summary>
+public interface ISchedulingEffects
+{
+    Task TransitionedAsync(Appointment after, AppointmentStatus from, BufferPolicy buffers, DateTimeOffset nowUtc, CancellationToken ct = default);
+}
+
+public sealed class NoSchedulingEffects : ISchedulingEffects
+{
+    public static readonly NoSchedulingEffects Instance = new();
+    public Task TransitionedAsync(Appointment after, AppointmentStatus from, BufferPolicy buffers, DateTimeOffset nowUtc, CancellationToken ct = default) =>
+        Task.CompletedTask;
+}
+
+public sealed class SchedulingOptions
+{
+    /// <summary>CON-006 undo window for a committed reassign. Zero turns undo off.</summary>
+    public int UndoWindowSeconds { get; set; } = 120;
+    /// <summary>The most appointments one bulk move may carry.</summary>
+    public int BulkMoveLimit { get; set; } = 50;
 }
 
 public sealed record GuestBusyInterval(string PropertyId, string AppointmentId, DateTimeOffset StartUtc, DateTimeOffset EndUtc);
@@ -61,8 +107,18 @@ public interface IPreflightStore
     /// <summary>Reads without consuming, so a recoverable refusal leaves the token usable.</summary>
     Task<PreflightResult?> FindAsync(string tenantId, string token, CancellationToken ct = default);
 
-    /// <summary>Consumes the token. Returns false if someone else took it first.</summary>
-    Task<bool> TryConsumeAsync(string tenantId, string token, DateTimeOffset nowUtc, DateTimeOffset? undoUntilUtc, string? reason, CancellationToken ct = default);
+    /// <summary>
+    /// Consumes the token, recording where the appointment was so the move can
+    /// be undone. Returns false if someone else took it first.
+    /// </summary>
+    Task<bool> TryConsumeAsync(string tenantId, string token, DateTimeOffset nowUtc, DateTimeOffset? undoUntilUtc,
+        string? reason, Placement? previous, CancellationToken ct = default);
+
+    /// <summary>A committed token, for undo. Null when unknown or never committed.</summary>
+    Task<CommittedMove?> FindCommittedAsync(string tenantId, string token, CancellationToken ct = default);
+
+    /// <summary>Marks the move undone. False if it already was (an undo happens once).</summary>
+    Task<bool> TryMarkUndoneAsync(string tenantId, string token, DateTimeOffset nowUtc, CancellationToken ct = default);
 
     /// <summary>Marks expired tokens Expired and returns how many.</summary>
     Task<int> EvictExpiredAsync(DateTimeOffset nowUtc, CancellationToken ct = default);

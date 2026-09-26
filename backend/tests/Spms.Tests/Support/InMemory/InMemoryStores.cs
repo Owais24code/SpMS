@@ -102,6 +102,21 @@ public sealed class InMemoryAppointmentRepository : IAppointmentRepository
                 .ToList());
     }
 
+    /// <summary>No database constraint here; the Postgres suite proves the deferred exclusion.</summary>
+    public Task DeferRoomExclusionAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+    public Task CheckRoomExclusionAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+    public Task<IReadOnlyList<Appointment>> ListExpiredHoldsAsync(
+        string tenantId, string propertyId, DateTimeOffset nowUtc, int limit, CancellationToken ct = default)
+    {
+        lock (_gate)
+            return Task.FromResult<IReadOnlyList<Appointment>>(_byId.Values
+                .Where(a => a.TenantId == tenantId && a.PropertyId == propertyId
+                            && a.Status == AppointmentStatus.Held && a.HoldExpiresUtc <= nowUtc)
+                .OrderBy(a => a.HoldExpiresUtc).Take(limit).Select(a => a.Copy()).ToList());
+    }
+
     private static string Key(string tenantId, string id) => $"{tenantId}/{id}";
 }
 
@@ -220,14 +235,37 @@ public sealed class InMemoryPreflightStore : IPreflightStore
             return Task.FromResult(_tokens.TryGetValue(Scope(tenantId, token), out var r) ? r : null);
     }
 
+    private readonly Dictionary<string, CommittedMove> _committed = new(StringComparer.Ordinal);
+
     public Task<bool> TryConsumeAsync(string tenantId, string token, DateTimeOffset nowUtc,
-        DateTimeOffset? undoUntilUtc, string? reason, CancellationToken ct = default)
+        DateTimeOffset? undoUntilUtc, string? reason, Placement? previous, CancellationToken ct = default)
     {
         lock (_gate)
         {
-            var removed = _tokens.Remove(Scope(tenantId, token));
-            if (removed) LastUndoUntil = undoUntilUtc;
-            return Task.FromResult(removed);
+            if (!_tokens.Remove(Scope(tenantId, token), out var pf)) return Task.FromResult(false);
+            LastUndoUntil = undoUntilUtc;
+            if (previous is not null)
+                _committed[Scope(tenantId, token)] = new CommittedMove(pf.Proposal.AppointmentId, pf.PropertyId,
+                    pf.Proposal.FromRowVersion + 1, previous, undoUntilUtc, null);
+            return Task.FromResult(true);
+        }
+    }
+
+    public Task<CommittedMove?> FindCommittedAsync(string tenantId, string token, CancellationToken ct = default)
+    {
+        lock (_gate)
+            return Task.FromResult(_committed.TryGetValue(Scope(tenantId, token), out var m) ? m : null);
+    }
+
+    public Task<bool> TryMarkUndoneAsync(string tenantId, string token, DateTimeOffset nowUtc, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            var key = Scope(tenantId, token);
+            if (!_committed.TryGetValue(key, out var m) || m.UndoneUtc is not null || m.UndoUntilUtc is not { } until || nowUtc >= until)
+                return Task.FromResult(false);
+            _committed[key] = m with { UndoneUtc = nowUtc };
+            return Task.FromResult(true);
         }
     }
 

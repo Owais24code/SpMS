@@ -89,6 +89,10 @@ public sealed partial class ScheduleChangeProposalRow : IPropertyOwned, IVersion
     public DateTimeOffset ExpiresAt { get; set; }
     public DateTimeOffset? CommittedAt { get; set; }
     public DateTimeOffset? UndoUntil { get; set; }
+    public DateTimeOffset? PreviousStart { get; set; }
+    public Guid? PreviousProviderId { get; set; }
+    public Guid? PreviousRoomId { get; set; }
+    public DateTimeOffset? UndoneAt { get; set; }
     public string Status { get; set; } = "Open";
     public int Version { get; set; } = 1;
     public DateTimeOffset CreatedAt { get; set; }

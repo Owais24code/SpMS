@@ -283,10 +283,9 @@ export class Schedule {
         this.announce('Move committed.');
         this.toast.success('Appointment moved',
           `${res.proposedStart}–${res.proposedEnd}.`,
-          // Offered only where it can actually be honoured. Against the API a
-          // committed reassign is already audited; reverting it is a
-          // compensating reschedule, not an undo.
-          this.store.canUndo() ? () => this.undo() : undefined);
+          // Offered only where it can be honoured: the server's CON-006
+          // window, with the token that committed the move.
+          this.store.canUndo() ? () => void this.undo() : undefined);
         return;
 
       case 'reason-required':
@@ -401,14 +400,16 @@ export class Schedule {
   }
 
   /** CON-006: revert inside the window, compensating reschedule after it. */
-  protected undo(): void {
-    const outcome = this.store.undoLastMove();
-    if (outcome === 'undone') {
+  protected async undo(): Promise<void> {
+    const outcome = await this.store.undoLastMove();
+    if (outcome.kind === 'undone') {
       this.toast.success('Move reverted', 'The board is back as it was.');
       this.announce('Move reverted.');
+    } else if (outcome.kind === 'refused') {
+      this.toast.error('Could not undo the move', outcome.problem.detail ?? outcome.problem.title, outcome.problem.correlationId);
     } else {
       this.toast.warn('Undo window has closed',
-        `Undo is available for ${UNDO_WINDOW_MS / 1000} seconds. Book a compensating reschedule instead so the guest is told.`);
+        'Book a compensating reschedule instead so the guest is told.');
     }
   }
 
@@ -463,7 +464,7 @@ export class Schedule {
     if (res.kind === 'committed') {
       this.toast.success('Override recorded',
         'The appointment is booked and your reason is on the audit trail.',
-        this.store.canUndo() ? () => this.undo() : undefined);
+        this.store.canUndo() ? () => void this.undo() : undefined);
       this.close();
     } else {
       this.toast.error('That did not commit', 'Your reason is still here — try again.', res.code);

@@ -40,7 +40,7 @@ SpMS/
 
 **Dev logins.** In Development the API accepts `X-Spa-Login: <handle>` and resolves it through
 the same principal resolver an Entra token uses: roles, properties and scopes come from the
-database. The seeded handles are `dana` (front desk, Riverside), `morgan` (spa manager and
+database. The seeded handles are `dana` (front desk, Riverside), `hana` (housekeeping, Riverside), `morgan` (spa manager and
 platform admin, both properties), `riley` (scheduler), `lena` (provider), `sam` (finance) and
 `ada` (platform admin). The sign-in screen offers them in `demo` mode.
 
@@ -345,16 +345,37 @@ Work is delivered in eight batches. Each is one commit on `main`.
 |---|---|---|
 | 1 | Backend foundation: EF Core on the 61-table R1 schema, three-layer tenancy, module split | Done |
 | 2 | Identity and authorization: Entra JWT, principal resolution, OpenFGA checks and tuple sync, guest magic links; MSAL / dev-login sign-in, property switcher, guest landing | Done |
-| 3 | Scheduling completion: CON-005 tenant-wide, CON-006 undo, CON-007 bulk move, holds, visits, waitlist, turnaround | Planned |
+| 3 | Scheduling completion: tenant-wide CON-005, undo window, all-or-nothing bulk move, hold expiry, visits, waitlist, room turnover; desk check-in, undo, waitlist and turnover screens on the API | Done |
 | 4 | Guests and intake: profiles, merge, delegation, consent, privacy; intake with envelope encryption | Planned |
 | 5 | Commerce and payments: orders, deposits, refunds with dual approval, provider-agnostic port | Planned |
 | 6 | Catalogue, resources, workforce, inventory CRUD and settings approval | Planned |
 | 7 | Messaging, reporting, devices, integrations, Marquee mode | Planned |
 | 8 | Operating mode, search, live board, partition/retention jobs, API + PostgreSQL bicep, observability | Planned |
 
-**Verified (batch 2):** backend 186/186 tests against PostgreSQL 16 and OpenFGA 1.10.2; HTTP
-sweep 85/85 in permissive and real-FGA modes; web unit tests (vitest) and Playwright e2e
-(sign-in, reload, property switch, guest magic link single use) green.
+**Verified (batch 3):** backend 204/204 tests against PostgreSQL 16 and OpenFGA 1.10.2; HTTP
+sweep 95/95 in permissive and real-FGA modes; web unit tests (vitest) 10/10 and Playwright e2e
+9/9 (sign-in, property switch, guest magic link, desk check-in, room turnover, waitlist offer).
+
+**Scheduling operations (batch 3):**
+
+- **Undo (CON-006 window).** A committed reassign answers `undoUntilUtc`; the same token undoes it
+  once (`POST /appointments/{id}/undo-reassign`). The undo is refused if the appointment changed
+  since, or the original slot was taken in the meantime. The window is `Scheduling:UndoWindowSeconds`
+  (120 by default).
+- **Bulk move** (`POST /schedule/bulk-move`, `dryRun`) is all or nothing. Each item is judged against
+  the board after every item has moved, so two appointments can trade rooms. The room exclusion is
+  `DEFERRABLE` and deferred for the batch only.
+- **Holds** expire through the per-property job runner (`core.active_properties()`, one scope and one
+  transaction per job per property): Held becomes Cancelled with reason `HoldExpired`.
+  `POST /dev/jobs/run` forces a run in Development.
+- **Visits** (`/visits`) follow their appointments. The first check-in marks the visit Arrived and the
+  first treatment marks it InProgress. Cancelling or no-showing a visit cascades to its bookings that
+  have not started.
+- **Waitlist** (`/waitlist`, `/waitlist/candidates`): offer for N minutes, accept onto a booking.
+  Lapsed offers return to Waiting.
+- **Room turnover** (`/turnaround`): a completed treatment creates a Turnover task. Housekeeping
+  (`spa.inventory` plus `can_update_room_readiness`) completes it. `/front-desk/arrivals` reports the
+  room as not ready while the task is open.
 
 **Open decisions (not ours to close):**
 

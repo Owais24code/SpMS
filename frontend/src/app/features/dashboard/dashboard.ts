@@ -48,7 +48,8 @@ export class Dashboard {
     const res = await this.store.checkIn(a.id);
     this.busy.set(null);
     if (res.kind === 'committed') {
-      this.toast.success(`${a.guestAlias} checked in`, undefined, () => this.store.undoCheckIn(a.id));
+      this.toast.success(`${a.guestAlias} checked in`, undefined,
+        this.store.canUndoCheckIn ? () => this.store.undoCheckIn(a.id) : undefined);
     } else {
       this.toast.warn('Not ready', 'Open Check-in to clear the outstanding items.', res.code);
     }

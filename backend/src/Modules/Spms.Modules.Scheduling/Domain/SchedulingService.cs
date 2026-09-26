@@ -12,7 +12,7 @@ namespace Spms.Modules.Scheduling.Domain;
 /// numbered requirements (§1114-1127) and the conflict-code register
 /// (§2953-2959). The codes below are the register.
 /// </summary>
-public sealed class SchedulingService(
+public sealed partial class SchedulingService(
     IAppointmentRepository repository,
     IPreflightStore preflights,
     IAuditSink audit,
@@ -23,9 +23,17 @@ public sealed class SchedulingService(
     IGuestDirectory guests,
     IResourceCalendar calendar,
     IOutbox outbox,
-    IClock clock)
+    IClock clock,
+    ISchedulingEffects? effects = null,
+    SchedulingOptions? options = null)
 {
     public static readonly TimeSpan PreflightTtl = TimeSpan.FromSeconds(90);
+
+    private readonly ISchedulingEffects _effects = effects ?? NoSchedulingEffects.Instance;
+    private readonly SchedulingOptions _options = options ?? new SchedulingOptions();
+
+    /// <summary>CON-006: how long a committed reassign may be undone by the operator who made it.</summary>
+    public TimeSpan UndoWindow => TimeSpan.FromSeconds(Math.Max(0, _options.UndoWindowSeconds));
 
     /// <summary>
     /// How far either side of the proposal to load neighbours, on top of the
@@ -43,14 +51,28 @@ public sealed class SchedulingService(
     /// half, so the commit path can re-run it and a create can use it without
     /// leaving a live token behind.
     /// </summary>
-    public async Task<IReadOnlyList<Conflict>> EvaluateAsync(
-        string tenantId, string propertyId, Appointment target, MoveProposal proposal, CancellationToken ct = default)
+    public Task<IReadOnlyList<Conflict>> EvaluateAsync(
+        string tenantId, string propertyId, Appointment target, MoveProposal proposal, CancellationToken ct = default) =>
+        EvaluatePlacementAsync(tenantId, propertyId, target,
+            new Placement(proposal.StartUtc, proposal.ProviderId ?? target.ProviderId, proposal.RoomId ?? target.RoomId),
+            overlay: null, ct);
+
+    /// <summary>
+    /// Evaluates the target at an exact placement (a null provider or room
+    /// means none, not "unchanged"). <paramref name="overlay"/> replaces stored
+    /// neighbours with their post-change state, so a bulk move is judged
+    /// against the board as it will be, not as it was (CON-005's complete
+    /// post-change state).
+    /// </summary>
+    public async Task<IReadOnlyList<Conflict>> EvaluatePlacementAsync(
+        string tenantId, string propertyId, Appointment target, Placement placement,
+        IReadOnlyDictionary<string, Appointment>? overlay, CancellationToken ct = default)
     {
-        var proposedStart = proposal.StartUtc;
+        var proposedStart = placement.StartUtc;
         var proposedEnd = proposedStart.AddMinutes(target.DurationMinutes);
 
-        var providerId = proposal.ProviderId ?? target.ProviderId;
-        var roomId = proposal.RoomId ?? target.RoomId;
+        var providerId = placement.ProviderId;
+        var roomId = placement.RoomId;
 
         var profile = await properties.FindAsync(tenantId, propertyId, ct);
         var buffers = profile?.BuffersFor(target.ServiceId) ?? BufferPolicy.Fallback;
@@ -58,10 +80,17 @@ public sealed class SchedulingService(
         // Widen the window by the largest buffer plus the scan slack, so
         // touching intervals and turnover violations either side are loaded.
         var pad = TimeSpan.FromMinutes(Math.Max(buffers.RoomTurnoverMinutes, buffers.ProviderTransitionMinutes));
-        var neighbours = await repository.ListOverlappingAsync(
-            tenantId, propertyId,
-            proposedStart - pad - NeighbourScanSlack,
-            proposedEnd + pad + NeighbourScanSlack, ct);
+        var scanFrom = proposedStart - pad - NeighbourScanSlack;
+        var scanTo = proposedEnd + pad + NeighbourScanSlack;
+        IReadOnlyList<Appointment> neighbours = await repository.ListOverlappingAsync(tenantId, propertyId, scanFrom, scanTo, ct);
+        if (overlay is { Count: > 0 })
+        {
+            // Stored rows that are moving are replaced by where they are going;
+            // moved rows that land inside the scan are added.
+            neighbours = neighbours.Where(n => !overlay.ContainsKey(n.AppointmentId))
+                .Concat(overlay.Values.Where(o => o.Overlaps(scanFrom, scanTo)))
+                .ToList();
+        }
 
         var conflicts = new List<Conflict>();
 
@@ -148,6 +177,10 @@ public sealed class SchedulingService(
         // property-local, so this asks the tenant-wide interval function, which
         // returns intervals only and never another property's booking detail.
         var elsewhere = await repository.GuestBusyAsync(tenantId, target.GuestId, proposedStart, proposedEnd, ct);
+        // The busy intervals are read from storage; a guest whose other booking
+        // is moving in the same bulk operation is judged where it is going.
+        if (overlay is not null)
+            elsewhere = elsewhere.Where(b => !overlay.ContainsKey(b.AppointmentId)).ToList();
         if (elsewhere.Any(b => b.AppointmentId != target.AppointmentId
                                && !string.Equals(b.PropertyId, propertyId, StringComparison.Ordinal)))
             conflicts.Add(ConflictCatalog.GuestOverlapElsewhere(target.GuestAlias));
@@ -400,8 +433,10 @@ public sealed class SchedulingService(
         if (unseen.Count > 0)
             return new CommitResult(CommitOutcome.BoardChanged, appointment, pf, current);
 
-        var undoUntil = undoWindow is { } w && w > TimeSpan.Zero ? clock.UtcNow.Add(w) : (DateTimeOffset?)null;
-        if (!await preflights.TryConsumeAsync(tenantId, token, clock.UtcNow, undoUntil, reason, ct))
+        var window = undoWindow ?? UndoWindow;
+        var undoUntil = window > TimeSpan.Zero ? clock.UtcNow.Add(window) : (DateTimeOffset?)null;
+        var previous = new Placement(appointment.StartUtc, appointment.ProviderId, appointment.RoomId);
+        if (!await preflights.TryConsumeAsync(tenantId, token, clock.UtcNow, undoUntil, reason, previous, ct))
             return new CommitResult(CommitOutcome.TokenInvalid, appointment, pf, []);
 
         var beforeHash = StateHash.Of(appointment);
@@ -484,6 +519,10 @@ public sealed class SchedulingService(
             var stored = await repository.GetAsync(tenantId, propertyId, appointmentId, ct);
             return new TransitionResult(TransitionOutcome.StaleVersion, stored, []);
         }
+
+        var profile = await properties.FindAsync(tenantId, propertyId, ct);
+        await _effects.TransitionedAsync(appointment, from,
+            profile?.BuffersFor(appointment.ServiceId) ?? BufferPolicy.Fallback, clock.UtcNow, ct);
 
         await audit.RecordAsync(new AuditEntry(
             Action: "appointment.transition", EntityType: "appointment", EntityId: appointment.AppointmentId,

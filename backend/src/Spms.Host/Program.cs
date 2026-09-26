@@ -30,7 +30,15 @@ builder.Services.AddSpmsProtection(builder.Configuration, builder.Environment);
 // Guest magic links: where the guest web lives, and (Development only) logging links instead of sending them.
 builder.Services.AddSingleton(builder.Configuration.GetSection("Guest:Links").Get<Spms.Modules.Guest.Identity.GuestLinkOptions>()
     ?? new Spms.Modules.Guest.Identity.GuestLinkOptions { LogLinks = builder.Environment.IsDevelopment() });
+builder.Services.AddSingleton(builder.Configuration.GetSection("Scheduling").Get<Spms.Modules.Scheduling.Domain.SchedulingOptions>()
+    ?? new Spms.Modules.Scheduling.Domain.SchedulingOptions());
 builder.Services.AddSpmsModules();
+
+// Per-property housekeeping jobs (hold expiry, preflight expiry, waitlist offers).
+var jobs = builder.Configuration.GetSection("Jobs").Get<Spms.Host.Workers.JobOptions>() ?? new Spms.Host.Workers.JobOptions();
+builder.Services.AddSingleton(jobs);
+builder.Services.AddSingleton<Spms.Host.Workers.JobRunner>();
+if (jobs.Enabled) builder.Services.AddHostedService<Spms.Host.Workers.JobWorker>();
 
 /* --------------------------------- auth --------------------------------- */
 

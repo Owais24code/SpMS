@@ -1,3 +1,4 @@
+import { environment } from '../../../environments/environment';
 import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
 import { PageHeader } from '../../shared/components/page-header/page-header';
 import { DurationPipe } from '../../shared/pipes/duration.pipe';
@@ -128,6 +129,12 @@ export class Appointments {
     });
     if (!ok) { this.toast.info('Kept', 'Your appointment is unchanged.'); return; }
 
+    if (environment.useRealApi) {
+      const res = await this.store.cancelAppointmentReal(first.id);
+      if (res.kind === 'committed') this.toast.success('Appointment cancelled', `${first.guestAlias}: the slot is free again.`);
+      else this.toast.error('Could not cancel', 'The server refused the cancellation.', res.code);
+      return;
+    }
     this.store.cancelAppointment(first.id);
     this.toast.success('Appointment cancelled', 'Deposit refunded. Receipt on its way.');
   }

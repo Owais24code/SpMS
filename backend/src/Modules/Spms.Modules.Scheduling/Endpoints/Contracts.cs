@@ -33,7 +33,8 @@ public sealed record AppointmentDto(
     string CurrencyCode,
     string? VisitId,
     string? HoldExpiresUtc,
-    string? CheckedInUtc)
+    string? CheckedInUtc,
+    string? UndoUntilUtc = null)
 {
     public static AppointmentDto From(Appointment a) => new(
         a.AppointmentId, a.GuestAlias, a.ServiceId, a.ServiceName, a.DurationMinutes,
@@ -180,6 +181,20 @@ public sealed record PreflightResponse(
 }
 
 public sealed record ReassignRequest(string? Token, string? Reason);
+public sealed record UndoRequest(string? Token);
+
+public sealed record BulkMoveItemRequest(string? AppointmentId, string? StartUtc, string? ProviderId, string? RoomId, int? FromRowVersion);
+public sealed record BulkMoveRequest(IReadOnlyList<BulkMoveItemRequest>? Moves, string? Reason, bool? DryRun);
+
+public sealed record BulkMoveItemDto(string AppointmentId, string State, IReadOnlyList<ConflictDto> Conflicts, AppointmentDto? Appointment);
+
+public sealed record BulkMoveResponse(string Outcome, bool CommitAllowed, bool RequiresReason, IReadOnlyList<BulkMoveItemDto> Items)
+{
+    public static BulkMoveResponse From(SchedulingService.BulkResult r) => new(
+        r.Outcome.ToString(), !r.HasHard, r.HasSoft,
+        r.Items.Select(i => new BulkMoveItemDto(i.AppointmentId, i.State.ToString(), ConflictDto.FromAll(i.Conflicts),
+            i.Appointment is null ? null : AppointmentDto.From(i.Appointment))).ToList());
+}
 public sealed record TransitionRequest(string? To, string? Reason, string? ReasonCode = null);
 
 /// <summary>

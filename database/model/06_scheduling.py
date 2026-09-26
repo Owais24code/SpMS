@@ -89,10 +89,13 @@ CREATE TRIGGER appointment_end_at BEFORE INSERT OR UPDATE OF start_at, duration_
 -- CON-002, HARD: a room cannot hold two treatments at once. Cancelled and no-show
 -- rows hold nothing. Violations raise SQLSTATE 23P01, mapped back to CON-002.
 -- CON-001 (provider overlap) is SOFT and overridable, so it is only indexed.
+-- DEFERRABLE INITIALLY IMMEDIATE: checked per statement as always, except that a
+-- bulk move defers it to swap two appointments' rooms inside one transaction.
 ALTER TABLE scheduling.appointment ADD CONSTRAINT appointment_room_no_overlap
     EXCLUDE USING gist (tenant_id WITH =, property_id WITH =, room_id WITH =,
                         tstzrange(start_at, end_at, '[)') WITH &&)
-    WHERE (room_id IS NOT NULL AND status NOT IN ('Cancelled', 'NoShow'));
+    WHERE (room_id IS NOT NULL AND status NOT IN ('Cancelled', 'NoShow'))
+    DEFERRABLE INITIALLY IMMEDIATE;
 """)
 
 table(S, "schedule_change_proposal", AGGREGATE, PROPERTY, key=None, source_cols=False, handoff="completed (absorbs conflict_result)",
@@ -114,9 +117,14 @@ table(S, "schedule_change_proposal", AGGREGATE, PROPERTY, key=None, source_cols=
           col("expires_at", "timestamptz"),
           col("committed_at", "timestamptz", null=True),
           col("undo_until", "timestamptz", null=True, doc="CON-006 undo window end"),
+          col("previous_start", "timestamptz", null=True, doc="where the appointment was before the commit: what an undo restores"),
+          col("previous_provider_id", "uuid", null=True, fk="workforce.staff.staff_id"),
+          col("previous_room_id", "uuid", null=True, fk="resources.resource.resource_id", same_property=True),
+          col("undone_at", "timestamptz", null=True, doc="set once: a move is undone at most once"),
       ],
       checks=[("range_forward", "proposed_end > proposed_start"),
-              ("committed_complete", "(status = 'Committed') = (committed_at IS NOT NULL)")],
+              ("committed_complete", "(status = 'Committed') = (committed_at IS NOT NULL)"),
+              ("undo_after_commit", "undone_at IS NULL OR (committed_at IS NOT NULL AND undone_at >= committed_at)")],
       uniques=[("token_uq", "token_hash")],
       indexes=["schedule_change_proposal_expiry_ix ON scheduling.schedule_change_proposal (expires_at) WHERE status = 'Open'"],
       dropped=[("conflict_result (table)", "conflicts jsonb: a record of what was shown, never queried relationally")],

@@ -183,6 +183,24 @@ public static class Guard
         return false;
     }
 
+    /// <summary>
+    /// API-002 on a consequential write: If-Match must carry the version the
+    /// caller read. Null when it does (the version is in <paramref name="rowVersion"/>).
+    /// </summary>
+    public static IResult? RequireIfMatch(HttpContext http, RequestContext ctx, out int rowVersion)
+    {
+        rowVersion = 0;
+        var ifMatch = http.Request.Headers.IfMatch.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(ifMatch))
+            return Problem.From(ApiError.ValidationFailed, ctx.CorrelationId, "If-Match is required. Send the ETag you read.",
+                extensions: Problem.Ext("field_violations", new[] { new { field = "If-Match", rule = "required" } }));
+        if (!TryParseIfMatchVersion(ifMatch, out rowVersion))
+            return Problem.From(ApiError.ValidationFailed, ctx.CorrelationId,
+                "If-Match must carry the ETag you read, such as \"3\". A wildcard is not accepted on this operation.",
+                extensions: Problem.Ext("field_violations", new[] { new { field = "If-Match", rule = "explicit_etag_required" } }));
+        return null;
+    }
+
     public static (int Offset, int Limit) Page(int? offset, int? limit) =>
         (Math.Max(0, offset ?? 0), Math.Clamp(limit ?? PageLimits.Default, 1, PageLimits.Max));
 }

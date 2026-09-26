@@ -112,6 +112,10 @@ CREATE TABLE scheduling.schedule_change_proposal (
     expires_at                     timestamptz NOT NULL,
     committed_at                   timestamptz,
     undo_until                     timestamptz,
+    previous_start                 timestamptz,
+    previous_provider_id           uuid,
+    previous_room_id               uuid,
+    undone_at                      timestamptz,
     status                         text NOT NULL DEFAULT 'Open',
     version                        integer NOT NULL DEFAULT 1,
     created_at                     timestamptz NOT NULL DEFAULT now(),
@@ -126,11 +130,14 @@ CREATE TABLE scheduling.schedule_change_proposal (
     CONSTRAINT schedule_change_proposal_status_known CHECK (status IN ('Open', 'Committed', 'Expired', 'Rejected', 'Superseded')),
     CONSTRAINT schedule_change_proposal_range_forward CHECK (proposed_end > proposed_start),
     CONSTRAINT schedule_change_proposal_committed_complete CHECK ((status = 'Committed') = (committed_at IS NOT NULL)),
+    CONSTRAINT schedule_change_proposal_undo_after_commit CHECK (undone_at IS NULL OR (committed_at IS NOT NULL AND undone_at >= committed_at)),
     CONSTRAINT schedule_change_proposal_token_uq UNIQUE (token_hash)
 );
 COMMENT ON TABLE scheduling.schedule_change_proposal IS 'A preflight: what the operator was shown and agreed to. Single use; commit re-evaluates and compares. [SCH-020 / GUI-003 preflight; CON-006 undo window]';
 COMMENT ON COLUMN scheduling.schedule_change_proposal.conflicts IS 'as shown: [{code: ''CON-001'', severity: ''Soft'', subject, override_allowed, overridden}]';
 COMMENT ON COLUMN scheduling.schedule_change_proposal.undo_until IS 'CON-006 undo window end';
+COMMENT ON COLUMN scheduling.schedule_change_proposal.previous_start IS 'where the appointment was before the commit: what an undo restores';
+COMMENT ON COLUMN scheduling.schedule_change_proposal.undone_at IS 'set once: a move is undone at most once';
 
 CREATE TABLE scheduling.waitlist_entry (
     waitlist_id                    uuid NOT NULL DEFAULT core.uuid_v7(),
@@ -234,6 +241,10 @@ ALTER TABLE scheduling.schedule_change_proposal ADD CONSTRAINT schedule_change_p
 CREATE INDEX schedule_change_proposal_proposed_provider_id_ix ON scheduling.schedule_change_proposal (tenant_id, proposed_provider_id);
 ALTER TABLE scheduling.schedule_change_proposal ADD CONSTRAINT schedule_change_proposal_proposed_room_id_fk FOREIGN KEY (tenant_id, property_id, proposed_room_id) REFERENCES resources.resource (tenant_id, property_id, resource_id) ON DELETE RESTRICT;
 CREATE INDEX schedule_change_proposal_proposed_room_id_ix ON scheduling.schedule_change_proposal (tenant_id, property_id, proposed_room_id);
+ALTER TABLE scheduling.schedule_change_proposal ADD CONSTRAINT schedule_change_proposal_previous_provider_id_fk FOREIGN KEY (tenant_id, previous_provider_id) REFERENCES workforce.staff (tenant_id, staff_id) ON DELETE RESTRICT;
+CREATE INDEX schedule_change_proposal_previous_provider_id_ix ON scheduling.schedule_change_proposal (tenant_id, previous_provider_id);
+ALTER TABLE scheduling.schedule_change_proposal ADD CONSTRAINT schedule_change_proposal_previous_room_id_fk FOREIGN KEY (tenant_id, property_id, previous_room_id) REFERENCES resources.resource (tenant_id, property_id, resource_id) ON DELETE RESTRICT;
+CREATE INDEX schedule_change_proposal_previous_room_id_ix ON scheduling.schedule_change_proposal (tenant_id, property_id, previous_room_id);
 ALTER TABLE scheduling.schedule_change_proposal ADD CONSTRAINT schedule_change_proposal_tenant_fk FOREIGN KEY (tenant_id) REFERENCES core.tenant (tenant_id);
 ALTER TABLE scheduling.schedule_change_proposal ADD CONSTRAINT schedule_change_proposal_property_fk FOREIGN KEY (tenant_id, property_id) REFERENCES core.property (tenant_id, property_id);
 ALTER TABLE scheduling.waitlist_entry ADD CONSTRAINT waitlist_entry_guest_id_fk FOREIGN KEY (tenant_id, guest_id) REFERENCES guest.guest (tenant_id, guest_id) ON DELETE RESTRICT;
@@ -287,10 +298,13 @@ CREATE TRIGGER appointment_end_at BEFORE INSERT OR UPDATE OF start_at, duration_
 -- CON-002, HARD: a room cannot hold two treatments at once. Cancelled and no-show
 -- rows hold nothing. Violations raise SQLSTATE 23P01, mapped back to CON-002.
 -- CON-001 (provider overlap) is SOFT and overridable, so it is only indexed.
+-- DEFERRABLE INITIALLY IMMEDIATE: checked per statement as always, except that a
+-- bulk move defers it to swap two appointments' rooms inside one transaction.
 ALTER TABLE scheduling.appointment ADD CONSTRAINT appointment_room_no_overlap
     EXCLUDE USING gist (tenant_id WITH =, property_id WITH =, room_id WITH =,
                         tstzrange(start_at, end_at, '[)') WITH &&)
-    WHERE (room_id IS NOT NULL AND status NOT IN ('Cancelled', 'NoShow'));
+    WHERE (room_id IS NOT NULL AND status NOT IN ('Cancelled', 'NoShow'))
+    DEFERRABLE INITIALLY IMMEDIATE;
 CREATE INDEX schedule_change_proposal_expiry_ix ON scheduling.schedule_change_proposal (expires_at) WHERE status = 'Open';
 
 -- A hard conflict can never be recorded as overridden.

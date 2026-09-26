@@ -37,12 +37,14 @@ export const WORKSPACE_NAV: readonly NavGroup[] = [
     items: [
       { label: 'Booking',      path: '/app/booking',      icon: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M12 7v5l3.2 2' },
       { label: 'Appointments', path: '/app/appointments', icon: 'M7 4h10a2 2 0 0 1 2 2v14l-7-3.5L5 20V6a2 2 0 0 1 2-2z' },
+      { label: 'Waitlist',     path: '/app/waitlist',     icon: 'M8 6h12M8 12h12M8 18h8M4 6h.01M4 12h.01M4 18h.01' },
       { label: 'Messaging',    path: '/app/messaging',    icon: 'M21 11.5a8.4 8.4 0 0 1-9 8.4L4 21l1.1-3.6A8.4 8.4 0 1 1 21 11.5Z' },
     ],
   },
   {
     label: 'Operations',
     items: [
+      { label: 'Room turnover', path: '/app/turnover', icon: 'M4 20V9l8-5 8 5v11M9 20v-6h6v6' },
       { label: 'Inventory', path: '/app/inventory', icon: 'M4 8l8-4 8 4-8 4zM4 8v8l8 4 8-4V8' },
       { label: 'Devices',   path: '/app/devices',   icon: 'M18 15V10a6 6 0 1 0-12 0v5l-2 3h16zM10 21h4' },
       { label: 'Staff',     path: '/app/staff',     icon: 'M16 20v-1.5a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4V20M9.5 10.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7M21 20v-1.5a4 4 0 0 0-3-3.9' },
