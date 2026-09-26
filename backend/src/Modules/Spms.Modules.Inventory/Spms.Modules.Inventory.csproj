@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Module "inventory". Project references follow the module DAG in database/tools/dsl.py:
+       it may reference only core, catalog, resources, scheduling. A sideways reference does not compile. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Spms.SharedKernel\Spms.SharedKernel.csproj" />
+    <ProjectReference Include="..\..\Spms.Persistence\Spms.Persistence.csproj" />
+    <ProjectReference Include="..\..\Spms.Web\Spms.Web.csproj" />
+    <ProjectReference Include="..\Spms.Modules.Core\Spms.Modules.Core.csproj" />
+    <ProjectReference Include="..\Spms.Modules.Catalog\Spms.Modules.Catalog.csproj" />
+    <ProjectReference Include="..\Spms.Modules.Resources\Spms.Modules.Resources.csproj" />
+    <ProjectReference Include="..\Spms.Modules.Scheduling\Spms.Modules.Scheduling.csproj" />
+  </ItemGroup>
+</Project>

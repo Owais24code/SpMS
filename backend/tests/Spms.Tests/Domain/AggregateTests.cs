@@ -1,4 +1,4 @@
-using Spms.Domain.Scheduling;
+using Spms.Modules.Scheduling.Domain;
 using Spms.Tests.Support;
 using Xunit;
 
@@ -7,12 +7,23 @@ namespace Spms.Tests.Domain;
 public class StateMachineTests
 {
     [Fact]
-    public void Draft_can_be_confirmed() =>
-        Assert.True(AppointmentTransitions.CanMove(AppointmentStatus.Draft, AppointmentStatus.Confirmed));
+    public void A_hold_can_be_confirmed() =>
+        Assert.True(AppointmentTransitions.CanMove(AppointmentStatus.Held, AppointmentStatus.Confirmed));
 
     [Fact]
-    public void Draft_cannot_jump_straight_to_completed() =>
-        Assert.False(AppointmentTransitions.CanMove(AppointmentStatus.Draft, AppointmentStatus.Completed));
+    public void A_hold_cannot_jump_straight_to_completed() =>
+        Assert.False(AppointmentTransitions.CanMove(AppointmentStatus.Held, AppointmentStatus.Completed));
+
+    [Fact]
+    public void There_is_no_draft_status()
+    {
+        // The R1 schema has no Draft: an online slot hold is Held (with an
+        // expiry) and a desk booking starts Confirmed. The enum must be exactly
+        // the values the scheduling.appointment CHECK allows.
+        Assert.Equal(
+            ["Held", "Confirmed", "CheckedIn", "Ready", "InService", "Completed", "Cancelled", "NoShow"],
+            Enum.GetNames<AppointmentStatus>());
+    }
 
     [Fact]
     public void Completed_is_terminal() =>
@@ -35,11 +46,11 @@ public class StateMachineTests
     public void The_aggregate_refuses_an_illegal_transition_itself()
     {
         // Enforcement used to be one `if` in the HTTP endpoint, so any second
-        // caller could move Draft straight to Completed.
-        var a = SchedulingWorld.Appointment("t", AppointmentStatus.Draft, DateTimeOffset.UtcNow, 60);
+        // caller could move a hold straight to Completed.
+        var a = SchedulingWorld.Appointment("t", AppointmentStatus.Held, DateTimeOffset.UtcNow, 60);
         Assert.Throws<IllegalTransitionException>(() =>
             a.ApplyTransition(AppointmentStatus.Completed, DateTimeOffset.UtcNow));
-        Assert.Equal(AppointmentStatus.Draft, a.Status);
+        Assert.Equal(AppointmentStatus.Held, a.Status);
         Assert.Equal(1, a.RowVersion);
     }
 
@@ -51,7 +62,7 @@ public class StateMachineTests
         Assert.False(SchedulingWorld.Appointment("x", status, DateTimeOffset.UtcNow, 60).IsReschedulable);
 
     [Theory]
-    [InlineData(AppointmentStatus.Draft)]
+    [InlineData(AppointmentStatus.Held)]
     [InlineData(AppointmentStatus.Confirmed)]
     [InlineData(AppointmentStatus.InService)]
     public void Live_statuses_are_reschedulable(AppointmentStatus status) =>
@@ -74,8 +85,38 @@ public class AggregateTests
         // A zero duration makes EndUtc <= StartUtc, which turns off overlap
         // detection for that row entirely — and the database rejects it too.
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            Appointment.Create("z", "t", "p", "UTC", "g", "G", "svc-peel", "Peel", 0,
-                null, null, DateTimeOffset.UtcNow, null, "c", DateTimeOffset.UtcNow));
+            Appointment.Create(new Appointment.NewAppointment("z", "t", "p", "UTC", "g", "G", "svc-peel", "Peel", 0,
+                null, null, DateTimeOffset.UtcNow, null, "c", DateTimeOffset.UtcNow)));
+    }
+
+    [Fact]
+    public void A_hold_needs_an_expiry_and_nothing_else_has_one()
+    {
+        var now = DateTimeOffset.UtcNow;
+        Assert.Throws<ArgumentException>(() => Appointment.Create(new Appointment.NewAppointment(
+            "z", "t", "p", "UTC", "g", "G", "s", "S", 30, null, null, now, null, "c", now, InitialStatus: AppointmentStatus.Held)));
+        Assert.Throws<ArgumentException>(() => Appointment.Create(new Appointment.NewAppointment(
+            "z", "t", "p", "UTC", "g", "G", "s", "S", 30, null, null, now, null, "c", now, HoldExpiresUtc: now.AddMinutes(5))));
+    }
+
+    [Fact]
+    public void Leaving_a_hold_clears_its_expiry_and_status_timestamps_follow_the_status()
+    {
+        // The schema's CHECKs tie hold_expires_at, checked_in_at, cancelled_at
+        // and completed_at to the status; the aggregate moves them together.
+        var now = new DateTimeOffset(2026, 6, 1, 10, 0, 0, TimeSpan.Zero);
+        var a = SchedulingWorld.Appointment("x", AppointmentStatus.Held, now, 60);
+        Assert.NotNull(a.HoldExpiresUtc);
+
+        a.ApplyTransition(AppointmentStatus.Confirmed, now);
+        Assert.Null(a.HoldExpiresUtc);
+
+        a.ApplyTransition(AppointmentStatus.CheckedIn, now.AddMinutes(1));
+        Assert.Equal(now.AddMinutes(1), a.CheckedInUtc);
+
+        a.ApplyTransition(AppointmentStatus.Cancelled, now.AddMinutes(2), "GuestRequest");
+        Assert.Equal(now.AddMinutes(2), a.CancelledUtc);
+        Assert.Equal("GuestRequest", a.CancellationReasonCode);
     }
 
     [Fact]
@@ -122,10 +163,7 @@ public class AggregateTests
         var now = new DateTimeOffset(2026, 6, 1, 10, 0, 0, TimeSpan.Zero);
         var a = SchedulingWorld.Appointment("h", AppointmentStatus.Confirmed, now, 60, "prov-lena", "room-1");
 
-        var same = Appointment.Rehydrate(
-            a.AppointmentId, a.TenantId, a.PropertyId, a.PropertyTimeZone, a.GuestId, a.GuestAlias,
-            a.ServiceId, a.ServiceName, a.DurationMinutes, a.ProviderId, a.RoomId,
-            a.StartUtc, a.Status, rowVersion: 47, a.ConfirmationNumber, a.CorrelationId, a.CreatedUtc, a.UpdatedUtc);
+        var same = Appointment.Rehydrate(a.Snapshot() with { RowVersion = 47 });
 
         // RowVersion used to be inside the canonical string, so the two hashes
         // always differed and could not prove anything substantive had changed.

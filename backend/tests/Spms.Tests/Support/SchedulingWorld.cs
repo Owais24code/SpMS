@@ -1,6 +1,6 @@
-using Spms.Domain.Abstractions;
-using Spms.Domain.Scheduling;
-using Spms.Infrastructure.InMemory;
+using Spms.Modules.Scheduling.Domain;
+using Spms.SharedKernel;
+using Spms.Tests.Support.InMemory;
 
 namespace Spms.Tests.Support;
 
@@ -31,6 +31,9 @@ public sealed class SchedulingWorld
     public InMemoryServiceCatalog Services { get; } = new();
     public InMemoryQualificationRegister Qualifications { get; } = new();
     public InMemoryPropertyDirectory Properties { get; } = new();
+    public InMemoryGuestDirectory Guests { get; } = new();
+    public InMemoryOutbox Outbox { get; } = new();
+    public InMemoryResourceCalendar Calendar { get; } = new();
     public TestClock Clock { get; }
     public SchedulingService Scheduling { get; }
     public DateTimeOffset Day { get; }
@@ -64,7 +67,7 @@ public sealed class SchedulingWorld
 
         Scheduling = new SchedulingService(
             Repo, Preflights, Audit, new NullUnitOfWork(),
-            Services, Qualifications, Properties, Clock);
+            Services, Qualifications, Properties, Guests, Calendar, Outbox, Clock);
 
         Add(Appointment("a1", AppointmentStatus.Confirmed, Day.AddHours(9), 90, "prov-lena", "room-1",
             serviceId: "svc-deep", serviceName: "Deep tissue 90",
@@ -87,7 +90,7 @@ public sealed class SchedulingWorld
     public Task<Appointment?> Get(string id) => Repo.GetAsync(Tenant, Property, id);
 
     public Task<SchedulingService.CommitResult> Commit(string routeId, string token, string? reason = null) =>
-        Scheduling.CommitMoveAsync(Tenant, Property, routeId, token, reason, "actor-test", "corr-test");
+        Scheduling.CommitMoveAsync(Tenant, Property, routeId, token, reason, "corr-test");
 
     public Task<PreflightResult> Preflight(Appointment target, DateTimeOffset startUtc, string? provider, string? room) =>
         Scheduling.PreflightAsync(Tenant, Property, target,
@@ -105,45 +108,34 @@ public sealed class SchedulingWorld
         string serviceId = "svc-swedish", string serviceName = "Swedish 60",
         string guestId = "guest-0000", string alias = "Guest", string? confirmation = null)
     {
-        var a = Spms.Domain.Scheduling.Appointment.Create(
-            appointmentId: id, tenantId: Tenant, propertyId: Property, propertyTimeZone: "UTC",
-            guestId: guestId, guestAlias: alias,
-            serviceId: serviceId, serviceName: serviceName, durationMinutes: minutes,
-            providerId: provider, roomId: room,
-            startUtc: startUtc, confirmationNumber: confirmation,
-            correlationId: "fixture", nowUtc: startUtc);
+        var a = Spms.Modules.Scheduling.Domain.Appointment.Create(new Spms.Modules.Scheduling.Domain.Appointment.NewAppointment(
+            AppointmentId: id, TenantId: Tenant, PropertyId: Property, PropertyTimeZone: "UTC",
+            GuestId: guestId, GuestAlias: alias,
+            ServiceId: serviceId, ServiceName: serviceName, DurationMinutes: minutes,
+            ProviderId: provider, RoomId: room,
+            StartUtc: startUtc, ConfirmationNumber: confirmation,
+            CorrelationId: "fixture", NowUtc: startUtc,
+            InitialStatus: status == AppointmentStatus.Held ? AppointmentStatus.Held : AppointmentStatus.Confirmed,
+            HoldExpiresUtc: status == AppointmentStatus.Held ? startUtc.AddMinutes(15) : null));
 
         foreach (var step in PathTo(status)) a.ApplyTransition(step, startUtc);
 
-        return Spms.Domain.Scheduling.Appointment.Rehydrate(
-            a.AppointmentId, a.TenantId, a.PropertyId, a.PropertyTimeZone, a.GuestId, a.GuestAlias,
-            a.ServiceId, a.ServiceName, a.DurationMinutes, a.ProviderId, a.RoomId,
-            a.StartUtc, a.Status, rowVersion: 1, a.ConfirmationNumber, a.CorrelationId,
-            a.CreatedUtc, a.UpdatedUtc);
+        return Spms.Modules.Scheduling.Domain.Appointment.Rehydrate(a.Snapshot() with { RowVersion = 1 });
     }
 
     public static IEnumerable<AppointmentStatus> PathTo(AppointmentStatus target) => target switch
     {
-        AppointmentStatus.Draft => [],
-        AppointmentStatus.Held => [AppointmentStatus.Held],
-        AppointmentStatus.Confirmed => [AppointmentStatus.Confirmed],
-        AppointmentStatus.CheckedIn => [AppointmentStatus.Confirmed, AppointmentStatus.CheckedIn],
-        AppointmentStatus.Ready => [AppointmentStatus.Confirmed, AppointmentStatus.CheckedIn, AppointmentStatus.Ready],
-        AppointmentStatus.InService =>
-            [AppointmentStatus.Confirmed, AppointmentStatus.CheckedIn, AppointmentStatus.Ready, AppointmentStatus.InService],
+        AppointmentStatus.Held => [],
+        AppointmentStatus.Confirmed => [],
+        AppointmentStatus.CheckedIn => [AppointmentStatus.CheckedIn],
+        AppointmentStatus.Ready => [AppointmentStatus.CheckedIn, AppointmentStatus.Ready],
+        AppointmentStatus.InService => [AppointmentStatus.CheckedIn, AppointmentStatus.Ready, AppointmentStatus.InService],
         AppointmentStatus.Completed =>
-            [AppointmentStatus.Confirmed, AppointmentStatus.CheckedIn, AppointmentStatus.Ready,
-             AppointmentStatus.InService, AppointmentStatus.Completed],
+            [AppointmentStatus.CheckedIn, AppointmentStatus.Ready, AppointmentStatus.InService, AppointmentStatus.Completed],
         AppointmentStatus.Cancelled => [AppointmentStatus.Cancelled],
-        AppointmentStatus.NoShow => [AppointmentStatus.Confirmed, AppointmentStatus.NoShow],
+        AppointmentStatus.NoShow => [AppointmentStatus.NoShow],
         _ => throw new ArgumentOutOfRangeException(nameof(target)),
     };
-
-    public static AuditEntry AuditFor(string tenantId, string propertyId = Property) => new(
-        AtUtc: DateTimeOffset.UtcNow, TenantId: tenantId, PropertyId: propertyId, Actor: "a",
-        Action: "test", Purpose: "test", SubjectType: "appointment", SubjectId: "a1",
-        SubjectVersion: 1, BeforeHash: null, AfterHash: null,
-        ConflictCodes: [], SelectedResolution: null, TargetStatus: null, Reason: null, CorrelationId: "c");
 }
 
 public sealed class TestClock(DateTimeOffset start) : IClock

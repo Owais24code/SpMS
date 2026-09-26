@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Module "reporting". Project references follow the module DAG in database/tools/dsl.py:
+       it may reference only core. A sideways reference does not compile. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Spms.SharedKernel\Spms.SharedKernel.csproj" />
+    <ProjectReference Include="..\..\Spms.Persistence\Spms.Persistence.csproj" />
+    <ProjectReference Include="..\..\Spms.Web\Spms.Web.csproj" />
+    <ProjectReference Include="..\Spms.Modules.Core\Spms.Modules.Core.csproj" />
+  </ItemGroup>
+</Project>

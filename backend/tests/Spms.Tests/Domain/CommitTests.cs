@@ -1,4 +1,5 @@
-using Spms.Domain.Scheduling;
+using Spms.SharedKernel;
+using Spms.Modules.Scheduling.Domain;
 using Spms.Tests.Support;
 using Xunit;
 
@@ -94,7 +95,7 @@ public class PreflightTokenTests
         var pf = await w.Preflight(target, w.Day.AddHours(20), "prov-lena", "room-free");
 
         var r = await w.Scheduling.CommitMoveAsync(
-            "tenant-other", SchedulingWorld.Property, "a1", pf.Token, null, "actor", "corr");
+            "tenant-other", SchedulingWorld.Property, "a1", pf.Token, null, "corr");
         Assert.Equal(SchedulingService.CommitOutcome.TokenInvalid, r.Outcome);
 
         // And the rightful owner's token survived the attempt.
@@ -111,7 +112,7 @@ public class PreflightTokenTests
         // Blocked by a designed check on the token's own PropertyId, not
         // merely incidentally by the repository's property filter.
         var r = await w.Scheduling.CommitMoveAsync(
-            SchedulingWorld.Tenant, SchedulingWorld.Elsewhere, "a1", pf.Token, null, "actor", "corr");
+            SchedulingWorld.Tenant, SchedulingWorld.Elsewhere, "a1", pf.Token, null, "corr");
         Assert.Equal(SchedulingService.CommitOutcome.TokenInvalid, r.Outcome);
     }
 
@@ -253,7 +254,7 @@ public class CreateTests
         // the conflict rules entirely, so this was bookable.
         var r = await w.Scheduling.CreateAsync(SchedulingWorld.Tenant, SchedulingWorld.Property,
             Booking("new", "svc-swedish", w.Day.AddHours(9).AddMinutes(30), "prov-marco", "room-1"),
-            null, "actor");
+            null);
 
         Assert.Equal(SchedulingService.CreateOutcome.HardConflict, r.Outcome);
         Assert.Contains(r.Conflicts, c => c.Code == "CON-002");
@@ -266,11 +267,11 @@ public class CreateTests
         var w = new SchedulingWorld();
         var booking = Booking("new", "svc-swedish", w.Day.AddHours(9).AddMinutes(30), "prov-lena", "room-free");
 
-        var refused = await w.Scheduling.CreateAsync(SchedulingWorld.Tenant, SchedulingWorld.Property, booking, null, "actor");
+        var refused = await w.Scheduling.CreateAsync(SchedulingWorld.Tenant, SchedulingWorld.Property, booking, null);
         Assert.Equal(SchedulingService.CreateOutcome.ReasonRequired, refused.Outcome);
 
         var accepted = await w.Scheduling.CreateAsync(
-            SchedulingWorld.Tenant, SchedulingWorld.Property, booking, "Guest asked for Lena", "actor");
+            SchedulingWorld.Tenant, SchedulingWorld.Property, booking, "Guest asked for Lena");
         Assert.Equal(SchedulingService.CreateOutcome.Created, accepted.Outcome);
     }
 
@@ -279,7 +280,7 @@ public class CreateTests
     {
         var w = new SchedulingWorld();
         var r = await w.Scheduling.CreateAsync(SchedulingWorld.Tenant, SchedulingWorld.Property,
-            Booking("new", "svc-nonexistent", w.Day.AddHours(20), null, "room-free"), null, "actor");
+            Booking("new", "svc-nonexistent", w.Day.AddHours(20), null, "room-free"), null);
 
         Assert.Equal(SchedulingService.CreateOutcome.UnknownService, r.Outcome);
     }
@@ -289,7 +290,7 @@ public class CreateTests
     {
         var w = new SchedulingWorld();
         var r = await w.Scheduling.CreateAsync(SchedulingWorld.Tenant, "prop-nowhere",
-            Booking("new", "svc-peel", w.Day.AddHours(20), null, "room-free"), null, "actor");
+            Booking("new", "svc-peel", w.Day.AddHours(20), null, "room-free"), null);
 
         Assert.Equal(SchedulingService.CreateOutcome.UnknownProperty, r.Outcome);
     }
@@ -299,7 +300,7 @@ public class CreateTests
     {
         var w = new SchedulingWorld();
         var r = await w.Scheduling.CreateAsync(SchedulingWorld.Tenant, SchedulingWorld.Property,
-            Booking("new", "svc-peel", w.Day.AddHours(20), "prov-priya", "room-free"), null, "actor");
+            Booking("new", "svc-peel", w.Day.AddHours(20), "prov-priya", "room-free"), null);
 
         Assert.Equal(SchedulingService.CreateOutcome.Created, r.Outcome);
         Assert.Equal(30, r.Appointment!.DurationMinutes);
@@ -320,7 +321,7 @@ public class CreateTests
         var attempts = await Task.WhenAll(Enumerable.Range(0, 8).Select(i => Task.Run(() =>
             w.Scheduling.CreateAsync(SchedulingWorld.Tenant, SchedulingWorld.Property,
                 Booking($"race{i}", "svc-hotstone", slot, "prov-marco", "room-race", $"guest-{i}"),
-                null, "actor"))));
+                null))));
 
         Assert.Single(attempts, r => r.Outcome == SchedulingService.CreateOutcome.Created);
 
@@ -343,15 +344,18 @@ public class TransitionAndAuditTests
         Assert.Equal(SchedulingService.CommitOutcome.Committed,
             (await w.Commit("a1", pf.Token, reason: "Guest asked for Lena")).Outcome);
 
-        var entry = (await w.Audit.RecentAsync(SchedulingWorld.Tenant, SchedulingWorld.Property, 10)).First();
+        var entry = w.Audit.Recent(10).First();
         Assert.Equal("appointment.move", entry.Action);
-        Assert.Equal("Guest asked for Lena", entry.Reason);
-        Assert.Equal(SchedulingWorld.Property, entry.PropertyId);
-        Assert.Contains("CON-001", entry.ConflictCodes);
+        Assert.Equal("Guest asked for Lena", entry.ReasonText);
+        Assert.Equal("a1", entry.EntityId);
+        Assert.Contains("CON-001", entry.ConflictCodes!);
         Assert.NotNull(entry.BeforeHash);
         Assert.NotNull(entry.AfterHash);
+        Assert.Equal(64, entry.AfterHash!.Length);
         Assert.NotEqual(entry.BeforeHash, entry.AfterHash);
-        Assert.Equal("corr-test", entry.CorrelationId);
+
+        // The move is announced in the same unit of work.
+        Assert.Contains(w.Outbox.Events, e => e.EventType == EventTypes.AppointmentRescheduled);
     }
 
     [Fact]
@@ -359,15 +363,14 @@ public class TransitionAndAuditTests
     {
         var w = new SchedulingWorld();
         var r = await w.Scheduling.TransitionAsync(
-            SchedulingWorld.Tenant, SchedulingWorld.Property, "a1", AppointmentStatus.CheckedIn, 1, null, "actor", "corr");
+            SchedulingWorld.Tenant, SchedulingWorld.Property, "a1", AppointmentStatus.CheckedIn, 1, null, "corr");
         Assert.Equal(SchedulingService.TransitionOutcome.Applied, r.Outcome);
 
-        var entry = (await w.Audit.RecentAsync(SchedulingWorld.Tenant, SchedulingWorld.Property, 10)).First();
-        // The target status used to be written into SelectedResolution, which
-        // means "which alternative the operator picked" — so the trail claimed
-        // a resolution was chosen where none had been offered.
-        Assert.Equal("CheckedIn", entry.TargetStatus);
-        Assert.Null(entry.SelectedResolution);
+        var entry = w.Audit.Recent(10).First();
+        // Both ends of the transition are recorded, in their own fields.
+        Assert.Equal("Confirmed", entry.FromStatus);
+        Assert.Equal("CheckedIn", entry.ToStatus);
+        Assert.Null(entry.ConflictCodes);
     }
 
     [Fact]
@@ -375,7 +378,7 @@ public class TransitionAndAuditTests
     {
         var w = new SchedulingWorld();
         var r = await w.Scheduling.TransitionAsync(
-            SchedulingWorld.Tenant, SchedulingWorld.Property, "a1", AppointmentStatus.CheckedIn, 99, null, "actor", "corr");
+            SchedulingWorld.Tenant, SchedulingWorld.Property, "a1", AppointmentStatus.CheckedIn, 99, null, "corr");
         Assert.Equal(SchedulingService.TransitionOutcome.StaleVersion, r.Outcome);
     }
 
@@ -384,23 +387,8 @@ public class TransitionAndAuditTests
     {
         var w = new SchedulingWorld();
         var r = await w.Scheduling.TransitionAsync(
-            SchedulingWorld.Tenant, SchedulingWorld.Property, "a1", AppointmentStatus.Completed, 1, null, "actor", "corr");
+            SchedulingWorld.Tenant, SchedulingWorld.Property, "a1", AppointmentStatus.Completed, 1, null, "corr");
         Assert.Equal(SchedulingService.TransitionOutcome.Illegal, r.Outcome);
         Assert.NotEmpty(r.Allowed);
-    }
-
-    [Fact]
-    public async Task Audit_reads_are_scoped_by_tenant_and_property()
-    {
-        var w = new SchedulingWorld();
-        await w.Audit.RecordAsync(SchedulingWorld.AuditFor("tenant-other"));
-        await w.Audit.RecordAsync(SchedulingWorld.AuditFor(SchedulingWorld.Tenant, SchedulingWorld.Elsewhere));
-        await w.Audit.RecordAsync(SchedulingWorld.AuditFor(SchedulingWorld.Tenant));
-
-        // Tenant-only scoping let an admin at one property read every other
-        // property's actor names and subject ids.
-        Assert.Single(await w.Audit.RecentAsync(SchedulingWorld.Tenant, SchedulingWorld.Property, 50));
-        Assert.Single(await w.Audit.RecentAsync(SchedulingWorld.Tenant, SchedulingWorld.Elsewhere, 50));
-        Assert.Single(await w.Audit.RecentAsync("tenant-other", SchedulingWorld.Property, 50));
     }
 }

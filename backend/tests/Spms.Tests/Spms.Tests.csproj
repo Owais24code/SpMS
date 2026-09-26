@@ -6,10 +6,7 @@
     <NoWarn>$(NoWarn);xUnit1030</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Spms.Domain\Spms.Domain.csproj" />
-    <ProjectReference Include="..\..\src\Spms.Infrastructure\Spms.Infrastructure.csproj" />
-    <ProjectReference Include="..\..\src\Spms.Infrastructure.Postgres\Spms.Infrastructure.Postgres.csproj" />
-    <ProjectReference Include="..\..\src\Spms.Api\Spms.Api.csproj" />
+    <ProjectReference Include="..\..\src\Spms.Host\Spms.Host.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />

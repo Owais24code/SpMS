@@ -1,4 +1,4 @@
-using Spms.Domain.Scheduling;
+using Spms.Modules.Scheduling.Domain;
 using Spms.Tests.Support;
 using Xunit;
 

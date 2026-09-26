@@ -29,3 +29,7 @@ backend/vendor/
 
 # files delivered into the chat, not source
 Claude outputs/
+
+# python bytecode
+__pycache__/
+*.pyc

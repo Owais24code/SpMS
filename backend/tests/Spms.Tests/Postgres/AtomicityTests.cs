@@ -1,6 +1,6 @@
 using Npgsql;
-using Spms.Domain.Abstractions;
-using Spms.Domain.Scheduling;
+using Spms.SharedKernel;
+using Spms.Modules.Scheduling.Domain;
 using Spms.Tests.Support;
 using Xunit;
 
@@ -33,7 +33,7 @@ public class UnitOfWorkTests(PostgresFixture fixture) : IClassFixture<PostgresFi
         await using var fresh = new PostgresWorld(fixture);
         Assert.Equal(2, (await fresh.Get("uow1"))!.RowVersion);
 
-        var audit = await fresh.Audit.RecentAsync(PostgresWorld.Tenant, PostgresWorld.Property, 10);
+        var audit = await fresh.AuditRecentAsync(10);
         Assert.Contains(audit, a => a.Action == "appointment.move" && a.SubjectId == "uow1");
     }
 
@@ -69,7 +69,7 @@ public class UnitOfWorkTests(PostgresFixture fixture) : IClassFixture<PostgresFi
         Assert.Equal(1, (await fresh.Get("uow2"))!.RowVersion);
         Assert.Equal("room-2", (await fresh.Get("uow2"))!.RoomId);
 
-        var audit = await fresh.Audit.RecentAsync(PostgresWorld.Tenant, PostgresWorld.Property, 50);
+        var audit = await fresh.AuditRecentAsync(50);
         Assert.DoesNotContain(audit, a => a.SubjectId == "uow2");
     }
 
@@ -127,7 +127,7 @@ public class RoomOverlapConstraintTests(PostgresFixture fixture) : IClassFixture
                 new SchedulingService.NewBooking(
                     $"race{i}", $"guest-{i}", $"Guest {i}", "svc-hotstone", slot,
                     "prov-marco", "room-race", $"AARRACE{i}", "corr"),
-                null, "actor");
+                null);
         }));
 
         var created = attempts.Count(a => a.Outcome == SchedulingService.CreateOutcome.Created);
@@ -228,29 +228,25 @@ public class RoomOverlapConstraintTests(PostgresFixture fixture) : IClassFixture
     }
 
     [RequiresPostgres]
-    public async Task Another_tenant_may_hold_the_same_room_at_the_same_time()
+    public async Task Another_tenant_may_book_its_own_rooms_at_the_same_time()
     {
         await fixture.ResetBoardAsync();
         await fixture.SeedReferenceAsync(PostgresWorld.Tenant, PostgresWorld.Property);
-        await fixture.SeedReferenceAsync("tenant-other", PostgresWorld.Property);
+        await fixture.SeedReferenceAsync("tenant-other", "prop-other");
         await using var w = new PostgresWorld(fixture);
 
         var slot = w.Day.AddHours(12);
         await w.AddAsync(PostgresWorld.Appointment("iso1", AppointmentStatus.Confirmed,
             slot, 30, "prov-priya", "room-5", "svc-peel", "Peel 30"));
 
-        // The constraint is scoped by tenant, so two tenants' room-5 are
-        // different rooms.
-        await using var conn = await fixture.DataSource.OpenConnectionAsync();
-        await using var cmd = new NpgsqlCommand("""
-            INSERT INTO appointment
-              (tenant_id, property_id, appointment_id, guest_id, service_id, duration_minutes,
-               provider_id, room_id, start_utc, end_utc, status, row_version, correlation_id, created_utc, updated_utc)
-            VALUES ('tenant-other', @p, 'iso2', 'guest-0000', 'svc-peel', 30, 'prov-priya', 'room-5',
-                    @start, 'epoch', 'Confirmed', 1, 'c', now(), now());
-            """, conn);
-        cmd.Parameters.AddWithValue("p", PostgresWorld.Property);
-        cmd.Parameters.AddWithValue("start", slot);
-        Assert.Equal(1, await cmd.ExecuteNonQueryAsync());
+        // The other tenant's scope, its own room, the same instant: no conflict,
+        // because the exclusion is per tenant and property, and nothing of ours
+        // is visible to them.
+        await using var other = new PostgresWorld(fixture, tenant: "tenant-other", property: "prop-other");
+        var theirs = Spms.Modules.Scheduling.Domain.Appointment.Rehydrate(PostgresWorld.Appointment("iso2", AppointmentStatus.Confirmed,
+            slot, 30, null, "prop-other/room-5", "tenant-other/svc-peel", "Peel 30", guestId: "tenant-other/guest-0000")
+            .Snapshot() with { TenantId = "tenant-other", PropertyId = "prop-other" });
+        Assert.True(await other.Repo.TryAddAsync(theirs));
+        Assert.Null(await other.Repo.GetAsync("tenant-other", "prop-other", "iso1"));
     }
 }

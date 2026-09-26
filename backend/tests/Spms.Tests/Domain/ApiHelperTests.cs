@@ -1,6 +1,6 @@
-using Spms.Api.Endpoints;
-using Spms.Api.Infrastructure;
-using Spms.Domain.Errors;
+using Spms.SharedKernel;
+using Spms.Modules.Scheduling.Endpoints;
+using Spms.Web;
 using Xunit;
 
 namespace Spms.Tests.Domain;

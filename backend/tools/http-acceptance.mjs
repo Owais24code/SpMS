@@ -8,9 +8,8 @@
  * domain, so a passing unit suite says nothing about them.
  *
  * Run it against a FRESHLY STARTED instance. Cases mutate the seeded board,
- * so a second run against the same process asserts against state the first
- * run left behind. The in-memory store is the reason; it goes away with the
- * database adapter.
+ * and a second run against the same database asserts against state the first
+ * run left behind: start from a fresh database (the dev seed is re-applied).
  *
  * Usage: node tools/http-acceptance.mjs [baseUrl]
  */
@@ -25,8 +24,8 @@ async function call(method, path, { scopes = ADMIN, body, headers = {}, tenant, 
   const h = {
     'X-Spa-Scopes': scopes,
     'X-Spa-Actor': 'qa-sweep',
-    'X-Spa-Tenant': tenant ?? 'tenant-demo',
-    'X-Spa-Property': property ?? 'prop-riverside',
+    'X-Spa-Tenant': tenant ?? TENANT,
+    'X-Spa-Property': property ?? RIVERSIDE,
     ...headers,
   };
   if (body !== undefined) h['Content-Type'] = 'application/json';
@@ -66,6 +65,53 @@ function ok(cond, because) {
 }
 
 const today = new Date().toISOString().slice(0, 10);
+
+/* ------------------------------ fixtures ------------------------------ */
+// The fixed ids of database/seed/dev.sql. Ad-hoc names used by the cases
+// ("room-http-1", "guest-race-3") are mapped onto the seed's spare rooms and
+// walk-in guests, one per distinct name, so every case books into a room and
+// a guest that really exist at the property.
+const U = (n) => `01920000-0000-7000-8000-${String(n).padStart(12, '0')}`;
+const TENANT = U(1);
+const RIVERSIDE = U(101);
+const HARBOUR = U(102);
+const INTRUDER = '01920000-0000-7000-8000-00000000dead';
+const NOWHERE = '01920000-0000-7000-8000-00000000beef';
+const SEED = { 1: U(801), 2: U(802), 3: U(803), 4: U(804), 5: U(805) };
+const SVC = { deep: U(401), aroma: U(402), facial: U(403), hotstone: U(404), swedish: U(405), peel: U(406) };
+const PROV = { lena: U(601), marco: U(602), priya: U(603) };
+const ROOM = { suite1: U(505), suite3: U(506) };
+const GUEST_4821 = U(701);
+
+const rooms = new Map();
+const guests = new Map();
+function R(name) {
+  if (!rooms.has(name)) {
+    if (rooms.size >= 40) throw new Error('the sweep needs more spare rooms than the seed provides');
+    rooms.set(name, U(1001 + rooms.size));
+  }
+  return rooms.get(name);
+}
+function G(name) {
+  if (!guests.has(name)) {
+    if (guests.size >= 40) throw new Error('the sweep needs more walk-in guests than the seed provides');
+    guests.set(name, U(2001 + guests.size));
+  }
+  return guests.get(name);
+}
+
+// Riverside's weekly hours from the seed: 09:00-21:00, Sundays 10:00-18:00.
+const nyWeekday = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })).getDay();
+const [OPEN_H, CLOSE_H] = nyWeekday === 0 ? [10, 18] : [9, 21];
+// A wall-clock time at Riverside today, as a UTC instant (the seed's board is in New York time).
+function ny(hhmm) {
+  const guess = new Date(`${today}T${hhmm}:00Z`);
+  const local = new Date(guess.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const utc = new Date(guess.toLocaleString('en-US', { timeZone: 'UTC' }));
+  return new Date(guess.getTime() + (utc - local)).toISOString().replace('.000Z', 'Z');
+}
+const slotsFor = (minutes) => Math.floor(((CLOSE_H - OPEN_H) * 60 - minutes) / 30) + 1;
+
 
 /* ----------------------------- plumbing ----------------------------- */
 
@@ -150,7 +196,7 @@ await test('audit requires spa.admin, not merely spa.read', async () => {
 });
 
 await test('a move requires spa.schedule, not spa.write', async () => {
-  const r = await call('POST', '/appointments/appt-seed00001/reassign', {
+  const r = await call('POST', `/appointments/${SEED[1]}/reassign`, {
     scopes: 'spa.read spa.write', body: { token: 'pf_nope' },
   });
   eq(403, r.status);
@@ -198,14 +244,14 @@ await test('an over-long window is refused', async () => {
 });
 
 await test('reading one appointment returns an ETag', async () => {
-  const r = await call('GET', '/appointments/appt-seed00001');
+  const r = await call('GET', `/appointments/${SEED[1]}`);
   eq(200, r.status);
   eq('"1"', r.headers.get('etag'));
   eq(1, r.json.rowVersion);
 });
 
 await test('a response never carries the guest id', async () => {
-  const r = await call('GET', '/appointments/appt-seed00001');
+  const r = await call('GET', `/appointments/${SEED[1]}`);
   ok(!('guestId' in r.json), 'guestId leaked to the client');
   ok(r.json.guestAlias, 'the alias should still be present');
 });
@@ -215,12 +261,12 @@ await test('an unknown id is 404', async () => {
 });
 
 await test('another property cannot read this one\'s appointment', async () => {
-  const r = await call('GET', '/appointments/appt-seed00001', { property: 'prop-somewhere-else' });
+  const r = await call('GET', `/appointments/${SEED[1]}`, { property: NOWHERE });
   eq(404, r.status);
 });
 
 await test('another tenant cannot read it either', async () => {
-  const r = await call('GET', '/appointments/appt-seed00001', { tenant: 'tenant-intruder' });
+  const r = await call('GET', `/appointments/${SEED[1]}`, { tenant: INTRUDER });
   eq(404, r.status);
 });
 
@@ -229,10 +275,10 @@ await test('another tenant cannot read it either', async () => {
 await test('availability reports slots for the day', async () => {
   const r = await call('GET', `/availability?date=${today}`);
   eq(200, r.status);
-  // 09:00-17:00 local, half-hourly, and a 60-minute default that must FIT
-  // before close: 09:00 through 16:00 inclusive. The bound was inclusive of
-  // the close time, so the last slot started at closing.
-  eq(15, r.json.slots.length);
+  // The property's hours, half-hourly, and a 60-minute default that must FIT
+  // before close. The bound was inclusive of the close time, so the last slot
+  // started at closing.
+  eq(slotsFor(60), r.json.slots.length);
   ok(r.json.slots.some(s => !s.open), 'the seeded board should close at least one slot');
 });
 
@@ -241,16 +287,17 @@ await test('availability is built in the property\'s zone, not UTC', async () =>
   eq('America/New_York', r.json.timeZone);
   // The grid was built from UTC midnight, so a 09:00-17:00 business day
   // actually ran 05:00-13:00 local while reporting the UTC clock as "local".
-  ok(r.json.slots[0].startLocal.endsWith('09:00'), `first slot local ${r.json.slots[0].startLocal}`);
-  ok(r.json.slots[0].startUtc.includes('T13:00'), `first slot utc ${r.json.slots[0].startUtc}`);
+  const open = `${String(OPEN_H).padStart(2, '0')}:00`;
+  ok(r.json.slots[0].startLocal.endsWith(open), `first slot local ${r.json.slots[0].startLocal}`);
+  ok(!r.json.slots[0].startUtc.includes(`T${open}`), `first slot utc ${r.json.slots[0].startUtc} is the local clock`);
 });
 
 await test('availability honours the service duration', async () => {
-  const r = await call('GET', `/availability?date=${today}&serviceId=svc-deep`);
+  const r = await call('GET', `/availability?date=${today}&serviceId=${SVC.deep}`);
   eq(200, r.status);
   eq(90, r.json.durationMinutes);
   // A 90-minute service fits fewer times before close than a 60-minute one.
-  eq(14, r.json.slots.length);
+  eq(slotsFor(90), r.json.slots.length);
 });
 
 await test('availability names the busy resource rather than closing the spa', async () => {
@@ -281,8 +328,8 @@ let createdId = null;
 await test('a valid create answers 201 with Location and ETag', async () => {
   const r = await call('POST', '/appointments', {
     body: {
-      guestId: 'guest-http-1', guestAlias: 'Guest HTTP 1', serviceId: 'svc-peel',
-      startUtc: `${today}T21:00:00Z`, providerId: 'prov-priya', roomId: 'room-http-1',
+      guestId: G('guest-http-1'), guestAlias: 'Guest HTTP 1', serviceId: SVC.peel,
+      startUtc: `${today}T21:00:00Z`, providerId: PROV.priya, roomId: R('room-http-1'),
     },
   });
   eq(201, r.status);
@@ -290,13 +337,13 @@ await test('a valid create answers 201 with Location and ETag', async () => {
   ok(createdId, 'no id returned');
   eq(`/appointments/${createdId}`, r.headers.get('location'));
   eq('"1"', r.headers.get('etag'));
-  eq('Draft', r.json.status);
+  eq('Confirmed', r.json.status, 'a desk booking starts Confirmed; there is no Draft');
   ok(/^AAR\d{9}$/.test(r.json.confirmationNumber ?? ''), `confirmation ${r.json.confirmationNumber}`);
 });
 
 await test('create rejects a missing guestId', async () => {
   const r = await call('POST', '/appointments', {
-    body: { guestAlias: 'No Id', serviceId: 'svc-peel', startUtc: `${today}T21:30:00Z` },
+    body: { guestAlias: 'No Id', serviceId: SVC.peel, startUtc: `${today}T21:30:00Z` },
   });
   eq(422, r.status);
   ok(r.json.field_violations.some(v => v.field === 'guestId'));
@@ -304,7 +351,7 @@ await test('create rejects a missing guestId', async () => {
 
 await test('create rejects an unknown service and lists the known ones', async () => {
   const r = await call('POST', '/appointments', {
-    body: { guestId: 'g', guestAlias: 'G', serviceId: 'svc-bogus', startUtc: `${today}T21:30:00Z` },
+    body: { guestId: G('g'), guestAlias: 'G', serviceId: 'svc-bogus', startUtc: `${today}T21:30:00Z` },
   });
   eq(422, r.status);
   ok(r.json.known_services?.length, 'the caller is not told what is valid');
@@ -321,7 +368,7 @@ await test('create rejects malformed JSON as 422, not 500', async () => {
 
 await test('create rejects a year-9999 start rather than throwing', async () => {
   const r = await call('POST', '/appointments', {
-    body: { guestId: 'g', guestAlias: 'G', serviceId: 'svc-peel', startUtc: '9999-12-31T23:59:00Z' },
+    body: { guestId: G('g'), guestAlias: 'G', serviceId: SVC.peel, startUtc: '9999-12-31T23:59:00Z' },
   });
   eq(422, r.status);
   ok(r.json.field_violations.some(v => v.field === 'startUtc'));
@@ -331,8 +378,8 @@ await test('create runs the conflict rules: an unqualified provider is refused',
   // prov-priya is facials and peels only; a deep tissue is a CON-003 hard stop.
   const r = await call('POST', '/appointments', {
     body: {
-      guestId: 'guest-http-2', guestAlias: 'Guest HTTP 2', serviceId: 'svc-deep',
-      startUtc: `${today}T22:00:00Z`, providerId: 'prov-priya', roomId: 'room-http-2',
+      guestId: G('guest-http-2'), guestAlias: 'Guest HTTP 2', serviceId: SVC.deep,
+      startUtc: `${today}T22:00:00Z`, providerId: PROV.priya, roomId: R('room-http-2'),
     },
   });
   eq(409, r.status);
@@ -343,8 +390,8 @@ await test('create runs the conflict rules: an unqualified provider is refused',
 await test('create refuses a room that is already occupied', async () => {
   const r = await call('POST', '/appointments', {
     body: {
-      guestId: 'guest-http-3', guestAlias: 'Guest HTTP 3', serviceId: 'svc-peel',
-      startUtc: `${today}T21:10:00Z`, providerId: 'prov-priya', roomId: 'room-http-1',
+      guestId: G('guest-http-3'), guestAlias: 'Guest HTTP 3', serviceId: SVC.peel,
+      startUtc: `${today}T21:10:00Z`, providerId: PROV.priya, roomId: R('room-http-1'),
     },
   });
   eq(409, r.status);
@@ -353,8 +400,8 @@ await test('create refuses a room that is already occupied', async () => {
 
 await test('create replays on a repeated Idempotency-Key', async () => {
   const body = {
-    guestId: 'guest-idem', guestAlias: 'Guest Idem', serviceId: 'svc-peel',
-    startUtc: `${today}T23:00:00Z`, providerId: 'prov-priya', roomId: 'room-idem',
+    guestId: G('guest-idem'), guestAlias: 'Guest Idem', serviceId: SVC.peel,
+    startUtc: `${today}T23:00:00Z`, providerId: PROV.priya, roomId: R('room-idem'),
   };
   const first = await call('POST', '/appointments', { body, headers: { 'Idempotency-Key': 'key-http-1' } });
   eq(201, first.status);
@@ -367,8 +414,8 @@ await test('create replays on a repeated Idempotency-Key', async () => {
 await test('the same key with a different body is 409', async () => {
   const r = await call('POST', '/appointments', {
     body: {
-      guestId: 'guest-idem-2', guestAlias: 'Different', serviceId: 'svc-peel',
-      startUtc: `${today}T23:30:00Z`, providerId: 'prov-priya', roomId: 'room-idem-2',
+      guestId: G('guest-idem-2'), guestAlias: 'Different', serviceId: SVC.peel,
+      startUtc: `${today}T23:30:00Z`, providerId: PROV.priya, roomId: R('room-idem-2'),
     },
     headers: { 'Idempotency-Key': 'key-http-1' },
   });
@@ -378,7 +425,7 @@ await test('the same key with a different body is 409', async () => {
 
 await test('a key burned on a rejected request can be reused', async () => {
   const bad = await call('POST', '/appointments', {
-    body: { guestAlias: 'Missing id', serviceId: 'svc-peel', startUtc: `${today}T23:45:00Z` },
+    body: { guestAlias: 'Missing id', serviceId: SVC.peel, startUtc: `${today}T23:45:00Z` },
     headers: { 'Idempotency-Key': 'key-http-retry' },
   });
   eq(422, bad.status);
@@ -387,8 +434,8 @@ await test('a key burned on a rejected request can be reused', async () => {
   // 409 against its own abandoned key forever.
   const good = await call('POST', '/appointments', {
     body: {
-      guestId: 'guest-retry', guestAlias: 'Retry', serviceId: 'svc-peel',
-      startUtc: `${today}T23:45:00Z`, providerId: 'prov-priya', roomId: 'room-retry',
+      guestId: G('guest-retry'), guestAlias: 'Retry', serviceId: SVC.peel,
+      startUtc: `${today}T23:45:00Z`, providerId: PROV.priya, roomId: R('room-retry'),
     },
     headers: { 'Idempotency-Key': 'key-http-retry' },
   });
@@ -399,7 +446,7 @@ await test('a key burned on a rejected request can be reused', async () => {
 
 await test('preflight requires fromRowVersion', async () => {
   const r = await call('POST', '/schedule/preflight', {
-    body: { appointmentId: 'appt-seed00002', startUtc: `${today}T18:00:00Z` },
+    body: { appointmentId: SEED[2], startUtc: `${today}T18:00:00Z` },
   });
   eq(422, r.status);
   ok(r.json.field_violations.some(v => v.field === 'fromRowVersion'),
@@ -408,7 +455,7 @@ await test('preflight requires fromRowVersion', async () => {
 
 await test('preflight refuses a stale fromRowVersion up front', async () => {
   const r = await call('POST', '/schedule/preflight', {
-    body: { appointmentId: 'appt-seed00002', startUtc: `${today}T18:00:00Z`, fromRowVersion: 99 },
+    body: { appointmentId: SEED[2], startUtc: `${today}T18:00:00Z`, fromRowVersion: 99 },
   });
   eq(412, r.status);
   eq('STALE_VERSION', r.json.code);
@@ -424,8 +471,8 @@ await test('preflight on an unknown appointment is 404', async () => {
 await test('a clean preflight answers 200 with a token and no conflicts', async () => {
   const r = await call('POST', '/schedule/preflight', {
     body: {
-      appointmentId: 'appt-seed00002', startUtc: `${today}T19:00:00Z`,
-      providerId: 'prov-priya', roomId: 'room-clean', fromRowVersion: 1,
+      appointmentId: SEED[2], startUtc: `${today}T19:00:00Z`,
+      providerId: PROV.priya, roomId: R('room-clean'), fromRowVersion: 1,
     },
   });
   eq(200, r.status);
@@ -439,8 +486,8 @@ await test('a clean preflight answers 200 with a token and no conflicts', async 
 await test('a conflicted preflight is still 200 and carries the alternatives', async () => {
   const r = await call('POST', '/schedule/preflight', {
     body: {
-      appointmentId: 'appt-seed00002', startUtc: `${today}T13:15:00Z`,
-      providerId: 'prov-priya', roomId: 'room-suite3', fromRowVersion: 1,
+      appointmentId: SEED[2], startUtc: ny('13:15'),
+      providerId: PROV.priya, roomId: ROOM.suite3, fromRowVersion: 1,
     },
   });
   eq(200, r.status, 'conflicts are information, not a failed request');
@@ -457,18 +504,18 @@ await test('a conflicted preflight is still 200 and carries the alternatives', a
 /* ------------------------------ reassign ------------------------------ */
 
 await test('the old /move path is gone', async () => {
-  const r = await call('POST', '/appointments/appt-seed00002/move', { body: { token: 'pf_x' } });
+  const r = await call('POST', `/appointments/${SEED[2]}/move`, { body: { token: 'pf_x' } });
   eq(404, r.status);
 });
 
 await test('reassign without a token is 422', async () => {
-  const r = await call('POST', '/appointments/appt-seed00002/reassign', { body: {} });
+  const r = await call('POST', `/appointments/${SEED[2]}/reassign`, { body: {} });
   eq(422, r.status);
   ok(r.json.field_violations.some(v => v.field === 'token'));
 });
 
 await test('an unknown token is 409 PREFLIGHT_EXPIRED and retryable', async () => {
-  const r = await call('POST', '/appointments/appt-seed00002/reassign', { body: { token: 'pf_madeup' } });
+  const r = await call('POST', `/appointments/${SEED[2]}/reassign`, { body: { token: 'pf_madeup' } });
   eq(409, r.status);
   eq('PREFLIGHT_EXPIRED', r.json.code);
   eq(true, r.json.retryable);
@@ -477,57 +524,57 @@ await test('an unknown token is 409 PREFLIGHT_EXPIRED and retryable', async () =
 await test('a token cannot be redirected at another appointment in the URL', async () => {
   const pf = await call('POST', '/schedule/preflight', {
     body: {
-      appointmentId: 'appt-seed00003', startUtc: `${today}T19:30:00Z`,
-      roomId: 'room-redirect', fromRowVersion: 1,
+      appointmentId: SEED[3], startUtc: `${today}T19:30:00Z`,
+      roomId: R('room-redirect'), fromRowVersion: 1,
     },
   });
   eq(200, pf.status);
 
-  const r = await call('POST', '/appointments/appt-seed00004/reassign', { body: { token: pf.json.token } });
+  const r = await call('POST', `/appointments/${SEED[4]}/reassign`, { body: { token: pf.json.token } });
   eq(422, r.status);
   ok(r.json.field_violations.some(v => v.rule === 'appointment_mismatch'),
      'the route id was ignored, so a client bug reschedules a different guest');
 
   // The victim must be untouched.
-  const victim = await call('GET', '/appointments/appt-seed00004');
+  const victim = await call('GET', `/appointments/${SEED[4]}`);
   eq(1, victim.json.rowVersion);
 });
 
 await test('a clean reassign commits, bumps the version and returns the new ETag', async () => {
   const pf = await call('POST', '/schedule/preflight', {
     body: {
-      appointmentId: 'appt-seed00005', startUtc: `${today}T20:00:00Z`,
-      providerId: 'prov-marco', roomId: 'room-moved', fromRowVersion: 1,
+      appointmentId: SEED[5], startUtc: `${today}T20:00:00Z`,
+      providerId: PROV.marco, roomId: R('room-moved'), fromRowVersion: 1,
     },
   });
   eq(200, pf.status);
   eq(true, pf.json.commitAllowed);
 
-  const r = await call('POST', '/appointments/appt-seed00005/reassign', { body: { token: pf.json.token } });
+  const r = await call('POST', `/appointments/${SEED[5]}/reassign`, { body: { token: pf.json.token } });
   eq(200, r.status);
   eq(2, r.json.rowVersion);
   eq('"2"', r.headers.get('etag'));
-  eq('room-moved', r.json.roomId);
+  eq(R('room-moved'), r.json.roomId);
   ok(r.json.startUtc.startsWith(`${today}T20:00`), `moved to ${r.json.startUtc}`);
 });
 
 await test('a token is single use', async () => {
   const pf = await call('POST', '/schedule/preflight', {
     body: {
-      appointmentId: 'appt-seed00003', startUtc: `${today}T20:30:00Z`,
-      roomId: 'room-single', fromRowVersion: 1,
+      appointmentId: SEED[3], startUtc: `${today}T20:30:00Z`,
+      roomId: R('room-single'), fromRowVersion: 1,
     },
   });
-  eq(200, (await call('POST', '/appointments/appt-seed00003/reassign', { body: { token: pf.json.token } })).status);
-  eq(409, (await call('POST', '/appointments/appt-seed00003/reassign', { body: { token: pf.json.token } })).status);
+  eq(200, (await call('POST', `/appointments/${SEED[3]}/reassign`, { body: { token: pf.json.token } })).status);
+  eq(409, (await call('POST', `/appointments/${SEED[3]}/reassign`, { body: { token: pf.json.token } })).status);
 });
 
 await test('a soft conflict demands a reason and keeps the token alive', async () => {
   // appt-seed00002 onto prov-priya's own later slot is a provider overlap.
   const pf = await call('POST', '/schedule/preflight', {
     body: {
-      appointmentId: 'appt-seed00001', startUtc: `${today}T20:15:00Z`,
-      providerId: 'prov-marco', roomId: 'room-soft', fromRowVersion: 1,
+      appointmentId: SEED[1], startUtc: `${today}T20:15:00Z`,
+      providerId: PROV.marco, roomId: R('room-soft'), fromRowVersion: 1,
     },
   });
   eq(200, pf.status);
@@ -537,12 +584,12 @@ await test('a soft conflict demands a reason and keeps the token alive', async (
     return;
   }
 
-  const refused = await call('POST', '/appointments/appt-seed00001/reassign', { body: { token: pf.json.token } });
+  const refused = await call('POST', `/appointments/${SEED[1]}/reassign`, { body: { token: pf.json.token } });
   eq(409, refused.status);
   eq('SOFT_CONFLICT_APPROVAL_REQUIRED', refused.json.code);
   eq(pf.json.token, refused.json.token, 'the refusal must hand the token back');
 
-  const accepted = await call('POST', '/appointments/appt-seed00001/reassign', {
+  const accepted = await call('POST', `/appointments/${SEED[1]}/reassign`, {
     body: { token: pf.json.token, reason: 'Guest requested this therapist' },
   });
   eq(200, accepted.status, 'consuming the token first made the reason prompt a dead end');
@@ -553,17 +600,17 @@ await test('a hard conflict is 409 and cannot be overridden with a reason', asyn
   // the seed around, so asserting against it made this pass or fail on order.
   const blocker = await call('POST', '/appointments', {
     body: {
-      guestId: 'guest-blocker', guestAlias: 'Guest Blocker', serviceId: 'svc-peel',
-      startUtc: `${today}T04:00:00Z`, providerId: 'prov-priya', roomId: 'room-hardblock',
+      guestId: G('guest-blocker'), guestAlias: 'Guest Blocker', serviceId: SVC.peel,
+      startUtc: `${today}T04:00:00Z`, providerId: PROV.priya, roomId: R('room-hardblock'),
     },
   });
   eq(201, blocker.status);
 
-  const current = await call('GET', '/appointments/appt-seed00004');
+  const current = await call('GET', `/appointments/${SEED[4]}`);
   const pf = await call('POST', '/schedule/preflight', {
     body: {
-      appointmentId: 'appt-seed00004', startUtc: `${today}T04:00:00Z`,
-      providerId: 'prov-marco', roomId: 'room-hardblock', fromRowVersion: current.json.rowVersion,
+      appointmentId: SEED[4], startUtc: `${today}T04:00:00Z`,
+      providerId: PROV.marco, roomId: R('room-hardblock'), fromRowVersion: current.json.rowVersion,
     },
   });
   eq(200, pf.status);
@@ -571,7 +618,7 @@ await test('a hard conflict is 409 and cannot be overridden with a reason', asyn
   eq(false, pf.json.commitAllowed);
   eq(false, pf.json.requiresReason, 'a reason box that can never succeed must not be offered');
 
-  const r = await call('POST', '/appointments/appt-seed00004/reassign', {
+  const r = await call('POST', `/appointments/${SEED[4]}/reassign`, {
     body: { token: pf.json.token, reason: 'I really want to' },
   });
   eq(409, r.status);
@@ -582,11 +629,11 @@ await test('a hard conflict is 409 and cannot be overridden with a reason', asyn
 /* ------------------- converged blocker regressions ------------------- */
 
 await test('a room taken after the token was minted refuses the commit', async () => {
-  const target = await call('GET', '/appointments/appt-seed00003');
+  const target = await call('GET', `/appointments/${SEED[3]}`);
   const pf = await call('POST', '/schedule/preflight', {
     body: {
-      appointmentId: 'appt-seed00003', startUtc: `${today}T02:00:00Z`,
-      roomId: 'room-window', fromRowVersion: target.json.rowVersion,
+      appointmentId: SEED[3], startUtc: `${today}T02:00:00Z`,
+      roomId: R('room-window'), fromRowVersion: target.json.rowVersion,
     },
   });
   eq(200, pf.status);
@@ -598,13 +645,13 @@ await test('a room taken after the token was minted refuses the commit', async (
   // invariant is over the SET of appointments sharing the room.
   const interloper = await call('POST', '/appointments', {
     body: {
-      guestId: 'guest-window', guestAlias: 'Guest Window', serviceId: 'svc-peel',
-      startUtc: `${today}T02:00:00Z`, providerId: 'prov-priya', roomId: 'room-window',
+      guestId: G('guest-window'), guestAlias: 'Guest Window', serviceId: SVC.peel,
+      startUtc: `${today}T02:00:00Z`, providerId: PROV.priya, roomId: R('room-window'),
     },
   });
   eq(201, interloper.status);
 
-  const r = await call('POST', '/appointments/appt-seed00003/reassign', { body: { token: pf.json.token } });
+  const r = await call('POST', `/appointments/${SEED[3]}/reassign`, { body: { token: pf.json.token } });
   // Trusting the preflight snapshot committed this with a 200 and put two
   // treatments in one room — CON-002, which no role may override.
   eq(409, r.status);
@@ -612,7 +659,7 @@ await test('a room taken after the token was minted refuses the commit', async (
   ok(r.json.conflicts.some(c => c.code === 'CON-002'), 'the new conflict is not reported back');
   ok(Array.isArray(r.json.conflicts_when_shown), 'the operator is not told what changed');
 
-  const after = await call('GET', '/appointments/appt-seed00003');
+  const after = await call('GET', `/appointments/${SEED[3]}`);
   eq(target.json.rowVersion, after.json.rowVersion, 'the move landed anyway');
   eq(target.json.roomId, after.json.roomId);
 });
@@ -620,14 +667,14 @@ await test('a room taken after the token was minted refuses the commit', async (
 await test('two clean tokens for the same slot cannot both commit', async () => {
   const a = await call('POST', '/appointments', {
     body: {
-      guestId: 'guest-tw-a', guestAlias: 'Guest TwinA', serviceId: 'svc-peel',
-      startUtc: `${today}T03:00:00Z`, roomId: 'room-tw-a',
+      guestId: G('guest-tw-a'), guestAlias: 'Guest TwinA', serviceId: SVC.peel,
+      startUtc: `${today}T03:00:00Z`, roomId: R('room-tw-a'),
     },
   });
   const b = await call('POST', '/appointments', {
     body: {
-      guestId: 'guest-tw-b', guestAlias: 'Guest TwinB', serviceId: 'svc-peel',
-      startUtc: `${today}T03:40:00Z`, roomId: 'room-tw-b',
+      guestId: G('guest-tw-b'), guestAlias: 'Guest TwinB', serviceId: SVC.peel,
+      startUtc: `${today}T03:40:00Z`, roomId: R('room-tw-b'),
     },
   });
   eq(201, a.status);
@@ -638,10 +685,10 @@ await test('two clean tokens for the same slot cannot both commit', async () => 
   const pfA = await call('POST', '/schedule/preflight', {
     // No provider on either: the point is the shared ROOM, and a provider
     // would drag in unrelated buffer conflicts from other cases' bookings.
-    body: { appointmentId: a.json.appointmentId, startUtc: `${today}T05:00:00Z`, roomId: 'room-tw-shared', fromRowVersion: 1 },
+    body: { appointmentId: a.json.appointmentId, startUtc: `${today}T05:00:00Z`, roomId: R('room-tw-shared'), fromRowVersion: 1 },
   });
   const pfB = await call('POST', '/schedule/preflight', {
-    body: { appointmentId: b.json.appointmentId, startUtc: `${today}T05:00:00Z`, roomId: 'room-tw-shared', fromRowVersion: 1 },
+    body: { appointmentId: b.json.appointmentId, startUtc: `${today}T05:00:00Z`, roomId: R('room-tw-shared'), fromRowVersion: 1 },
   });
   eq(true, pfA.json.commitAllowed);
   eq(true, pfB.json.commitAllowed);
@@ -655,8 +702,8 @@ await test('concurrent creates into one room admit exactly one', async () => {
   // these saw the room free and several of them succeeded.
   const attempts = await Promise.all([0, 1, 2, 3, 4, 5].map(i => call('POST', '/appointments', {
     body: {
-      guestId: `guest-race-${i}`, guestAlias: `Guest Race ${i}`, serviceId: 'svc-peel',
-      startUtc: `${today}T06:00:00Z`, providerId: 'prov-priya', roomId: 'room-http-race',
+      guestId: G(`guest-race-${i}`), guestAlias: `Guest Race ${i}`, serviceId: SVC.peel,
+      startUtc: `${today}T06:00:00Z`, providerId: PROV.priya, roomId: R('room-http-race'),
     },
   })));
 
@@ -669,16 +716,16 @@ await test('both CON-004 breaches are reported, not just the first', async () =>
   // under the 15-minute room buffer and under the 10-minute provider buffer.
   const neighbour = await call('POST', '/appointments', {
     body: {
-      guestId: 'guest-buf', guestAlias: 'Guest Buffer', serviceId: 'svc-peel',
-      startUtc: `${today}T07:00:00Z`, providerId: 'prov-priya', roomId: 'room-buf',
+      guestId: G('guest-buf'), guestAlias: 'Guest Buffer', serviceId: SVC.peel,
+      startUtc: `${today}T07:00:00Z`, providerId: PROV.priya, roomId: R('room-buf'),
     },
   });
   eq(201, neighbour.status);
 
   const mover = await call('POST', '/appointments', {
     body: {
-      guestId: 'guest-buf2', guestAlias: 'Guest Buffer 2', serviceId: 'svc-peel',
-      startUtc: `${today}T09:00:00Z`, providerId: 'prov-priya', roomId: 'room-buf2',
+      guestId: G('guest-buf2'), guestAlias: 'Guest Buffer 2', serviceId: SVC.peel,
+      startUtc: `${today}T09:00:00Z`, providerId: PROV.priya, roomId: R('room-buf2'),
     },
   });
   eq(201, mover.status);
@@ -688,7 +735,7 @@ await test('both CON-004 breaches are reported, not just the first', async () =>
   const pf = await call('POST', '/schedule/preflight', {
     body: {
       appointmentId: mover.json.appointmentId, startUtc: `${today}T07:35:00Z`,
-      providerId: 'prov-priya', roomId: 'room-buf', fromRowVersion: 1,
+      providerId: PROV.priya, roomId: R('room-buf'), fromRowVersion: 1,
     },
   });
   eq(200, pf.status);
@@ -704,8 +751,8 @@ await test('both CON-004 breaches are reported, not just the first', async () =>
 
 await test('an idempotency key does not cross properties', async () => {
   const body = {
-    guestId: 'guest-xp', guestAlias: 'Guest XP', serviceId: 'svc-peel',
-    startUtc: `${today}T10:00:00Z`, providerId: 'prov-priya', roomId: 'room-xp',
+    guestId: G('guest-xp'), guestAlias: 'Guest XP', serviceId: SVC.peel,
+    startUtc: `${today}T10:00:00Z`, providerId: PROV.priya, roomId: R('room-xp'),
   };
   const first = await call('POST', '/appointments', {
     body, headers: { 'Idempotency-Key': 'key-cross-property' },
@@ -716,7 +763,7 @@ await test('an idempotency key does not cross properties', async () => {
   // at a second property replayed the first property's record — id, guest
   // alias, room, confirmation number — to a property that owned nothing.
   const second = await call('POST', '/appointments', {
-    body, headers: { 'Idempotency-Key': 'key-cross-property' }, property: 'prop-other',
+    body, headers: { 'Idempotency-Key': 'key-cross-property' }, property: HARBOUR,
   });
   ok(second.status !== 201 || second.json.appointmentId !== first.json.appointmentId,
      'the other property received this property\'s appointment');
@@ -727,8 +774,8 @@ await test('a problem body never has its status replaced by an appointment statu
   // `status` overwrote the HTTP status with a string.
   const r = await call('POST', '/schedule/preflight', {
     body: {
-      appointmentId: 'appt-seed00001', startUtc: `${today}T11:00:00Z`,
-      providerId: 'prov-lena', roomId: 'room-x', fromRowVersion: 999,
+      appointmentId: SEED[1], startUtc: `${today}T11:00:00Z`,
+      providerId: PROV.lena, roomId: R('room-x'), fromRowVersion: 999,
     },
   });
   ok(r.status >= 400);
@@ -739,8 +786,8 @@ await test('a problem body never has its status replaced by an appointment statu
 await test('a field named startUtc is actually UTC', async () => {
   const r = await call('POST', '/appointments', {
     body: {
-      guestId: 'guest-tz', guestAlias: 'Guest TZ', serviceId: 'svc-peel',
-      startUtc: `${today}T08:00:00+05:30`, roomId: 'room-tz',
+      guestId: G('guest-tz'), guestAlias: 'Guest TZ', serviceId: SVC.peel,
+      startUtc: `${today}T08:00:00+05:30`, roomId: R('room-tz'),
     },
   });
   eq(201, r.status);
@@ -756,20 +803,20 @@ await test('audit hashes do not change when only the version does', async () => 
   ok(moves.length > 0, 'no move with hashes was audited');
   // RowVersion used to be inside the canonical string, so the two hashes
   // always differed and could not prove anything substantive had changed.
-  ok(moves.every(m => m.beforeHash.length === 32 && m.afterHash.length === 32), 'hash shape changed');
+  ok(moves.every(m => m.beforeHash.length === 64 && m.afterHash.length === 64), 'hashes are full SHA-256');
 });
 
 /* ---------------------------- transitions ---------------------------- */
 
 await test('a transition without If-Match is 422', async () => {
-  const r = await call('POST', `/appointments/${createdId}/transitions`, { body: { to: 'Confirmed' } });
+  const r = await call('POST', `/appointments/${createdId}/transitions`, { body: { to: 'CheckedIn' } });
   eq(422, r.status);
   ok(r.json.field_violations.some(v => v.field === 'If-Match'));
 });
 
 await test('a transition with a stale If-Match is 412 and shows the current state', async () => {
   const r = await call('POST', `/appointments/${createdId}/transitions`, {
-    body: { to: 'Confirmed' }, headers: { 'If-Match': '"99"' },
+    body: { to: 'CheckedIn' }, headers: { 'If-Match': '"99"' },
   });
   eq(412, r.status);
   eq('STALE_VERSION', r.json.code);
@@ -786,10 +833,10 @@ await test('an illegal transition is 422 and lists what is allowed', async () =>
 
 await test('a legal transition commits and bumps the version', async () => {
   const r = await call('POST', `/appointments/${createdId}/transitions`, {
-    body: { to: 'Confirmed' }, headers: { 'If-Match': '"1"' },
+    body: { to: 'CheckedIn' }, headers: { 'If-Match': '"1"' },
   });
   eq(200, r.status);
-  eq('Confirmed', r.json.status);
+  eq('CheckedIn', r.json.status);
   eq(2, r.json.rowVersion);
   eq('"2"', r.headers.get('etag'));
 });
@@ -799,7 +846,7 @@ await test('a bare wildcard If-Match is refused', async () => {
   // version they read; honouring it made 412 unreachable for any client that
   // always sent it, i.e. last-write-wins by default.
   const r = await call('POST', `/appointments/${createdId}/transitions`, {
-    body: { to: 'CheckedIn' }, headers: { 'If-Match': '*' },
+    body: { to: 'Ready' }, headers: { 'If-Match': '*' },
   });
   eq(422, r.status);
   ok(r.json.field_violations.some(v => v.rule === 'explicit_etag_required'));
@@ -807,10 +854,10 @@ await test('a bare wildcard If-Match is refused', async () => {
 
 await test('a weak ETag in If-Match is accepted', async () => {
   const r = await call('POST', `/appointments/${createdId}/transitions`, {
-    body: { to: 'CheckedIn' }, headers: { 'If-Match': 'W/"2"' },
+    body: { to: 'Ready' }, headers: { 'If-Match': 'W/"2"' },
   });
   eq(200, r.status);
-  eq('CheckedIn', r.json.status);
+  eq('Ready', r.json.status);
 });
 
 await test('an unknown status is 422 and lists the enum', async () => {
@@ -838,20 +885,20 @@ await test('the audit trail recorded the commits with hashes', async () => {
 await test('the audit trail never carries the hashed values themselves', async () => {
   const r = await call('GET', '/audit');
   const text = JSON.stringify(r.json);
-  ok(!text.includes('guest-4821'), 'a guest id reached the audit projection');
+  ok(!text.includes(GUEST_4821), 'a guest id reached the audit projection');
   ok(!text.includes('guestAlias'), 'the audit trail became a second copy of guest data');
 });
 
 await test('audit is scoped to the calling tenant', async () => {
   const mine = await call('GET', '/audit');
-  const theirs = await call('GET', '/audit', { tenant: 'tenant-intruder' });
+  const theirs = await call('GET', '/audit', { tenant: INTRUDER });
   eq(200, theirs.status);
   ok(mine.json.items.length > 0);
   eq(0, theirs.json.items.length, 'one tenant read another tenant\'s trail');
 });
 
 await test('audit is scoped to the calling property too', async () => {
-  const elsewhere = await call('GET', '/audit', { property: 'prop-elsewhere' });
+  const elsewhere = await call('GET', '/audit', { property: HARBOUR });
   eq(200, elsewhere.status);
   // Scoped by tenant alone, an admin at one property read every other
   // property's actor names, subject ids and correlation ids.
@@ -862,8 +909,8 @@ await test('a transition audit row records the target status, not a resolution',
   const r = await call('GET', '/audit?limit=200');
   const t = r.json.items.find(e => e.action === 'appointment.transition');
   ok(t, 'no transition was audited');
-  ok(t.targetStatus, 'the target status is missing');
-  eq(null, t.selectedResolution ?? null, 'the target status was written into the resolution field');
+  ok(t.toStatus, 'the target status is missing');
+  ok(t.fromStatus, 'the source status is missing');
 });
 
 /* ------------------------------ summary ------------------------------ */

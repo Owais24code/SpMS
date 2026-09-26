@@ -8,12 +8,14 @@
 #
 # Five jobs, deliberately separate so a failure names itself:
 #
-#   api       the solution built warnings-as-errors, then 150 xunit tests against a
-#             real postgres:16 - the migrations, the GiST exclusion constraint and
-#             the unit of work cannot be exercised by anything else - then the HTTP
-#             acceptance sweep against a freshly started instance.
+#   api       the solution built warnings-as-errors, then the xunit suite against a
+#             real postgres:16 - the EF migrations (the R1 baseline is the reviewed
+#             SQL), row-level security through SET LOCAL ROLE spms_app, the EF
+#             model/schema drift check, the GiST exclusion constraint and the unit
+#             of work - then the HTTP acceptance sweep against a freshly started host.
 #   web       the Angular production build and the contrast audit.
-#   database  the R1 reference schema regenerated (must match the committed SQL),
+#   database  the R1 reference schema and the generated EF model both regenerated
+#             (each must match what is committed),
 #             built on postgres:16 and its SQL tests run: RLS, CON-002, append-only,
 #             identity resolution, integrity.
 #   authz     the OpenFGA model validated and its tests run.
@@ -108,7 +110,7 @@ jobs:
           SPMS_CONNECTION: 'Host=127.0.0.1;Port=5432;Database=spms_http;Username=postgres;Password=spms'
         run: |
           PGPASSWORD=spms createdb -h 127.0.0.1 -U postgres spms_http
-          nohup dotnet run --project src/Spms.Api -c Release --no-build > "$RUNNER_TEMP/api.log" 2>&1 &
+          nohup dotnet run --project src/Spms.Host -c Release --no-build > "$RUNNER_TEMP/api.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/api.pid"
 
           for attempt in $(seq 1 40); do
@@ -211,6 +213,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
       # verify.sh first checks the committed SQL is exactly what the model generates,
       # so a hand edit to database/schema cannot slip through.
+      - name: Generated EF model is current
+        run: python3 database/tools/generate_ef.py --check
       - name: Build schema and run tests
         env:
           PGURL: postgresql://postgres:spms@localhost:5432/spms_verify

@@ -1,7 +1,7 @@
-using Spms.Domain.Abstractions;
-using Spms.Domain.Scheduling;
-using Spms.Infrastructure.InMemory;
-using Spms.Infrastructure.Postgres;
+using Microsoft.Extensions.DependencyInjection;
+using Spms.SharedKernel;
+using Spms.Modules.Scheduling.Domain;
+using Spms.Tests.Support.InMemory;
 using Spms.Tests.Support;
 using Xunit;
 
@@ -203,8 +203,11 @@ public class PostgresRepositoryConformance(PostgresFixture fixture) : IClassFixt
         // repository bug.
         await fixture.ResetBoardAsync();
         await fixture.SeedReferenceAsync(Tenant, Property);
-        return new PostgresAppointmentRepository(fixture.NewContext());
+        _world = new PostgresWorld(fixture);
+        return _world.Repo;
     }
+
+    private PostgresWorld? _world;
 
     [RequiresPostgres] public async Task Added_is_readable() => await RepositoryCases.Added_is_readable_within_its_property(await Repo(), Make, Tenant, Property);
     [RequiresPostgres] public async Task Reads_are_scoped() => await RepositoryCases.Reads_are_scoped_by_tenant_and_property(await Repo(), Make, Tenant, Property);
@@ -223,7 +226,13 @@ public static class IdempotencyCases
 {
     private static IdempotencyScope Key(string key, string tenant = "tenant-test", string property = "prop-test",
         string operation = "op", string route = "/appointments") =>
-        new(tenant, property, operation, route, key);
+        // A property belongs to one tenant, so another tenant's "prop-test" is a
+        // different property (and, in Postgres, a different row).
+        new(TestIds.IdOf(tenant), TestIds.IdOf(tenant == "tenant-test" ? property : tenant + ":" + property), null,
+            operation, route, "idem-key-" + key);
+
+    public static readonly (string Tenant, string Property)[] ScopesUsed =
+        [("tenant-test", "prop-test"), ("t2", "t2:prop-test"), ("tenant-test", "p2")];
 
     public static async Task A_first_claim_is_reserved_and_a_repeat_replays(IIdempotencyStore store)
     {
@@ -321,8 +330,8 @@ public static class IdempotencyCases
         await store.ClaimAsync(Key("k10"), "hash-a", now);
         await store.CompleteAsync(Key("k10"), 201, "{}", now);
 
-        Assert.Equal(0, await store.SweepAsync(now));
-        Assert.True(await store.SweepAsync(now.AddDays(2)) >= 1);
+        Assert.Equal(0, await store.SweepAsync(Key("k10"), now));
+        Assert.True(await store.SweepAsync(Key("k10"), now.AddDays(2)) >= 1);
         Assert.Equal(IdempotencyOutcome.Reserved, (await store.ClaimAsync(Key("k10"), "hash-a", now.AddDays(2))).Outcome);
     }
 }
@@ -348,7 +357,8 @@ public class PostgresIdempotencyConformance(PostgresFixture fixture) : IClassFix
     private IIdempotencyStore Store()
     {
         fixture.ResetBoardAsync().GetAwaiter().GetResult();
-        return new PostgresIdempotencyStore(fixture.DataSource);
+        foreach (var (t, p) in IdempotencyCases.ScopesUsed) fixture.SeedReferenceAsync(t, p).GetAwaiter().GetResult();
+        return fixture.Services.GetRequiredService<IIdempotencyStore>();
     }
 
     [RequiresPostgres] public Task First_claim_then_replay() => IdempotencyCases.A_first_claim_is_reserved_and_a_repeat_replays(Store());

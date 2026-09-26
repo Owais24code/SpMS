@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Types every module shares and nothing framework-heavy: clock, ids, errors,
+       scopes, the execution scope, the unit of work port and field protection. -->
+</Project>

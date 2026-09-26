@@ -1,5 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
-    <ProjectReference Include="..\Spms.Domain\Spms.Domain.csproj" />
-  </ItemGroup>
-</Project>
