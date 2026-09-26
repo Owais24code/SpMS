@@ -276,3 +276,21 @@ tests:
       - user: user:fin
         object: tenant:t1
         assertions: {can_manage_catalog: false, can_manage_staff: false}
+
+  - name: messaging and devices (batch 7)
+    check:
+      - user: user:mgr
+        object: property:a1
+        assertions: {can_read_messages: true, can_manage_templates: true, can_approve_templates: true, can_send_messages: true, can_manage_devices: true}
+      - user: user:mkt
+        object: property:a1
+        assertions: {can_read_messages: true, can_manage_templates: true, can_approve_templates: false, can_send_messages: false, can_manage_devices: false}
+      - user: user:desk
+        object: property:a1
+        assertions: {can_read_messages: true, can_manage_templates: false, can_send_messages: true, can_manage_devices: false, can_operate_devices_lockers: true}
+      - user: user:prov
+        object: property:a1
+        assertions: {can_read_messages: false, can_send_messages: false, can_manage_devices: false}
+      - user: user:admin
+        object: property:a1
+        assertions: {can_manage_templates: true, can_approve_templates: false, can_read_messages: true}

@@ -39,7 +39,7 @@ export const ROLE_LABELS: Record<string, string> = {
   hr_compliance: 'HR & compliance', finance: 'Finance', platform_admin: 'Platform admin',
   configuration_approver: 'Configuration approver', scheduler: 'Scheduler', housekeeping: 'Housekeeping',
   inventory_manager: 'Inventory manager', marketing: 'Marketing', support: 'Support',
-  operations_analyst: 'Operations analyst', executive: 'Executive', release_manager: 'Release manager',
+  operations_analyst: 'Operations analyst', executive: 'Executive', release_manager: 'Release manager', device: 'Device',
   security_admin: 'Security admin', integration_service: 'Integration service',
 };
 
@@ -47,7 +47,7 @@ export const ROLE_LABELS: Record<string, string> = {
 const ROLE_ORDER: readonly string[] = [
   'spa_manager', 'front_desk', 'scheduler', 'provider', 'finance', 'inventory_manager', 'hr_compliance',
   'housekeeping', 'configuration_approver', 'platform_admin', 'security_admin', 'operations_analyst',
-  'executive', 'marketing', 'support', 'release_manager', 'integration_service', 'guest',
+  'executive', 'marketing', 'support', 'release_manager', 'integration_service', 'device', 'guest',
 ];
 
 /**
@@ -89,6 +89,10 @@ export const ROLE_PRESETS = {
   housekeeping: {
     login: 'hana', roleCode: 'housekeeping', name: 'Hana', property: 'Riverside Spa', roleLabel: 'Housekeeping',
     scopes: [SCOPES.read, SCOPES.inventory],
+  },
+  kiosk: {
+    login: 'kiosk', roleCode: 'device', name: 'Lobby kiosk', property: 'Riverside Spa', roleLabel: 'Lobby kiosk',
+    scopes: [SCOPES.device],
   },
   platform_admin: {
     login: 'ada', roleCode: 'platform_admin', name: 'Ada', property: 'All properties', roleLabel: 'Platform admin',

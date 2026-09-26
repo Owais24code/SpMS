@@ -37,12 +37,18 @@ const workspaceRoutes: Routes = [
   { path: 'appointments',   title: 'Appointments — SpMS',   loadComponent: () => import('./features/appointments/appointments').then((m) => m.Appointments) },
   { path: 'waitlist',       title: 'Waitlist — SpMS',       canActivate: [scopeGuard(SCOPES.read)],       loadComponent: () => import('./features/waitlist/waitlist').then((m) => m.Waitlist) },
   { path: 'turnover',       title: 'Room turnover — SpMS',  canActivate: [scopeGuard(SCOPES.read)],       loadComponent: () => import('./features/turnover/turnover').then((m) => m.Turnover) },
-  { path: 'messaging',      title: 'Messaging — SpMS',      canActivate: [scopeGuard(SCOPES.messaging)], loadComponent: () => import('./features/messaging/messaging').then((m) => m.Messaging) },
+  { path: 'messaging', title: 'Messaging — SpMS', canActivate: [scopeGuard(SCOPES.read)],
+    loadComponent: () => environment.useRealApi
+      ? import('./features/messaging/messaging-live').then((m) => m.MessagingLive)
+      : import('./features/messaging/messaging').then((m) => m.Messaging) },
   { path: 'inventory',      title: 'Inventory — SpMS',      canActivate: [scopeGuard(SCOPES.inventory)],
     loadComponent: () => environment.useRealApi
       ? import('./features/inventory/inventory-live').then((m) => m.InventoryLive)
       : import('./features/inventory/inventory').then((m) => m.Inventory) },
-  { path: 'devices',        title: 'Devices — SpMS',        canActivate: [scopeGuard(SCOPES.device)],   loadComponent: () => import('./features/devices/devices').then((m) => m.Devices) },
+  { path: 'devices', title: 'Devices — SpMS', canActivate: [scopeGuard(SCOPES.device)],
+    loadComponent: () => environment.useRealApi
+      ? import('./features/devices/devices-live').then((m) => m.DevicesLive)
+      : import('./features/devices/devices').then((m) => m.Devices) },
   { path: 'staff',          title: 'Staff — SpMS',          canActivate: [scopeGuard(SCOPES.workforceRead)],
     loadComponent: () => environment.useRealApi
       ? import('./features/staff/staff-live').then((m) => m.StaffLive)
@@ -53,8 +59,14 @@ const workspaceRoutes: Routes = [
     loadComponent: () => environment.useRealApi
       ? import('./features/reconciliation/reconciliation-live').then((m) => m.ReconciliationLive)
       : import('./features/reconciliation/reconciliation').then((m) => m.Reconciliation) },
-  { path: 'reports',        title: 'Reports — SpMS',        canActivate: [scopeGuard(SCOPES.read)],       loadComponent: () => import('./features/reports/reports').then((m) => m.Reports) },
-  { path: 'integrations',   title: 'Integrations — SpMS',   canActivate: [scopeGuard(SCOPES.admin)], loadComponent: () => import('./features/integrations/integrations').then((m) => m.Integrations) },
+  { path: 'reports', title: 'Reports — SpMS', canActivate: [scopeGuard(SCOPES.read)],
+    loadComponent: () => environment.useRealApi
+      ? import('./features/reports/reports-live').then((m) => m.ReportsLive)
+      : import('./features/reports/reports').then((m) => m.Reports) },
+  { path: 'integrations', title: 'Integrations — SpMS', canActivate: [scopeGuard(SCOPES.read)],
+    loadComponent: () => environment.useRealApi
+      ? import('./features/integrations/integrations-live').then((m) => m.IntegrationsLive)
+      : import('./features/integrations/integrations').then((m) => m.Integrations) },
   { path: 'settings',       title: 'Settings — SpMS',       loadComponent: () => import('./features/settings/settings').then((m) => m.Settings) },
   { path: 'forbidden',      title: 'No access — SpMS',      loadComponent: () => import('./features/auth/forbidden/forbidden').then((m) => m.Forbidden) },
 ];
@@ -68,6 +80,9 @@ const guestRoutes: Routes = [
 
 export const routes: Routes = [
   ...guestRoutes,
+  // The lobby kiosk: full screen, signed in as its registered device.
+  { path: 'kiosk', title: 'Check in — AARFID SpMS', canActivate: [authGuard, scopeGuard(SCOPES.device)],
+    loadComponent: () => import('./features/kiosk/kiosk').then((m) => m.Kiosk) },
   {
     path: 'sign-in',
     title: 'Sign in — AARFID SpMS',

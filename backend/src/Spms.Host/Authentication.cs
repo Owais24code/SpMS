@@ -112,8 +112,7 @@ public static class SpmsAuth
                         }
                         var tokenScopes = principal.FindAll("scp").SelectMany(c => c.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
                             .Concat(principal.FindAll("roles").Select(c => c.Value));
-                        principal.AddIdentity(IdentityClaims.For(id, RequestedProperty(ctx.HttpContext), tokenScopes,
-                            id.PrincipalType == "Service" ? ActorType.Service : ActorType.Staff));
+                        principal.AddIdentity(IdentityClaims.For(id, RequestedProperty(ctx.HttpContext), tokenScopes, id.ActorType));
                     },
                     OnChallenge = Challenge,
                 };
@@ -228,7 +227,7 @@ public sealed class DevHeaderHandler(
         {
             var id = await resolver.ResolveAsync(SpmsAuth.DevIssuer, login.Trim(), Context.RequestAborted);
             if (id is null) return AuthenticateResult.Fail("Unknown development login.");
-            var identity = IdentityClaims.For(id, SpmsAuth.RequestedProperty(Context), [], ActorType.Staff);
+            var identity = IdentityClaims.For(id, SpmsAuth.RequestedProperty(Context), [], id.ActorType);
             return AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(identity), SpmsAuth.DevScheme));
         }
 

@@ -349,12 +349,12 @@ Work is delivered in eight batches. Each is one commit on `main`.
 | 4 | Guests and intake: profiles and search, reviewed merge and split, delegation, consent, privacy requests with export and erasure; intake and treatment notes under `spms_intake` with envelope encryption; Guests, live booking, provider tablet and guest intake screens | Done |
 | 5 | Commerce and payments: orders, deposits, refunds with dual approval, reconciliation, payment ownership, provider-agnostic port; Checkout and live Reconciliation screens | Done |
 | 6 | Reference data: catalogue and property offering, rooms and closures, staff with HR file, roles, qualifications, credentials and roster, stock ledger with counts and laundry, governed settings; Staff, Inventory and Setup screens | Done |
-| 7 | Messaging, reporting, devices, integrations, Marquee mode | Planned |
+| 7 | Messaging, reporting, devices, integrations, Marquee mode, kiosk; Messaging, Reports, Devices, Integrations and kiosk screens | Done |
 | 8 | Operating mode, search, live board, partition/retention jobs, API + PostgreSQL bicep, observability | Planned |
 
-**Verified (batch 6):** backend 227/227 tests against PostgreSQL 16 and OpenFGA 1.10.2; HTTP
-sweep 114/114 in permissive and real-FGA modes; `fga model test` 13/13 tests (135 checks); web
-unit tests 12/12; Playwright e2e 16/16.
+**Verified (batch 7):** backend 231/231 tests against PostgreSQL 16 and OpenFGA 1.10.2; HTTP
+sweep 121/121 in permissive and real-FGA modes; `fga model test` 14/14 tests (156 checks); web
+unit tests 12/12; Playwright e2e 19/19.
 
 **Scheduling operations (batch 3):**
 
@@ -376,6 +376,43 @@ unit tests 12/12; Playwright e2e 16/16.
 - **Room turnover** (`/turnaround`): a completed treatment creates a Turnover task. Housekeeping
   (`spa.inventory` plus `can_update_room_readiness`) completes it. `/front-desk/arrivals` reports the
   room as not ready while the task is open.
+
+**Messaging, reports, devices, integrations (batch 7):**
+
+- **Messaging** (`/messaging/*`; DEC-008 is open, so the provider is `IMessageSender`). Templates are
+  versioned and approved by someone other than their author (`can_approve_templates`). They may use
+  only `guestName`, `serviceName`, `startLocal`, `propertyName` and `confirmationNumber`, so a
+  message cannot carry intake, notes or payment details (SEC-010). The `messaging.schedule-reminders`
+  job turns triggers (AppointmentConfirmed, BeforeStart, IntakeDue, AfterCompletion) into messages,
+  once per template code, channel and booking. It moves them out of quiet hours
+  (`messaging.quiet_hours`, in the property's zone) and cancels them with their booking. Marketing
+  needs consent. `messaging.dispatch` renders and sends by the message's own key; a transient failure
+  is retried up to three times, and a message past its moment expires rather than going late. The
+  recipient address is encrypted and never served. Delivery reports arrive at
+  `/messaging/callbacks/{provider}` (integration service). In Development, `/dev/messages` shows what
+  the simulated provider sent.
+- **Reports** (`/reports`). `operations.daily`, `finance.daily` and `inventory.low-stock` read the
+  operational tables under row-level security, with counts, minutes and money only. Each run is saved
+  with the SHA-256 of its stored result and of its definition, so `resultIntact` and
+  `definitionCurrent` can be checked later, and a finished day is a closed snapshot. CSV export is
+  gated by its own right; cells that start with a formula character are neutralised.
+- **Devices** (`/devices`, SEC-013). A device is its own principal, registered at one property with its
+  public key and activated by the manager. Its tuples reach OpenFGA through the outbox. A device
+  signs in with the `device` role, holds only `spa.device`, acts only at its property, and stops
+  resolving the moment it is revoked.
+- **Kiosk** (`/kiosk/lookup`, `/kiosk/check-in`; screen at `/kiosk`, dev login `kiosk`). A guest finds
+  today's booking by confirmation number and last name and checks in. The kiosk never confirms that
+  a booking exists, never lists anything, and asks for the pair again at check-in.
+- **Marquee mode** (`/integrations/ownership`). Who owns each capability at a property is proposed by
+  one administrator and approved by another. The approved owner becomes the single authority from
+  its start, and the one it replaces ends there. With Marquee owning payment, a cart is Delegated;
+  the `commerce.marquee-outbound` job opens it at Marquee by its idempotency key
+  (`IMarqueeClient`); and `marquee.cart.settled` pays it with Marquee's receipt.
+- **Inbound events** (`/integrations/inbound/{system}`, integration service, dev login `marquee`) are
+  consumed exactly once through `core.event_inbox`, in the same transaction as their effect.
+  `marquee.guest.upserted` creates the guest and its mapping the first time and updates it after.
+  `/integrations/outbox` shows pending and failing events, with a replay; `/integrations/mappings`
+  lists the external ids.
 
 **Reference data (batch 6):**
 

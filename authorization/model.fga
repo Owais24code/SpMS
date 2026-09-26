@@ -122,6 +122,13 @@ type property
     define can_adjust_inventory: inventory_manager
     define can_move_stock_state: inventory_manager or housekeeping
     define can_schedule_messages: marketing
+    # messaging: templates are written by marketing or the manager and approved by the manager (not their author)
+    define can_read_messages: front_desk or spa_manager or marketing or platform_admin from tenant
+    define can_manage_templates: marketing or spa_manager or platform_admin from tenant
+    define can_approve_templates: spa_manager
+    define can_send_messages: front_desk or spa_manager
+    # devices are registered and revoked by the manager (SEC-013)
+    define can_manage_devices: spa_manager
     define can_replay_integration: support
     define can_integrate: integration_service
 

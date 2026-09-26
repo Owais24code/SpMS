@@ -36,7 +36,9 @@ export type RoleCode =
   | 'finance' | 'platform_admin' | 'configuration_approver' | 'scheduler'
   | 'housekeeping' | 'inventory_manager' | 'marketing' | 'support'
   | 'operations_analyst' | 'executive' | 'release_manager' | 'security_admin'
-  | 'integration_service';
+  | 'integration_service'
+  /** A registered device (kiosk, tablet); not a person's role. */
+  | 'device';
 
 /**
  * Fields the API refuses to serialize without scope AND relationship AND

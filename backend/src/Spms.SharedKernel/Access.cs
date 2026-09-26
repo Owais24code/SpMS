@@ -76,6 +76,8 @@ public static class RoleScopes
         ["release_manager"] = [SpaScopes.Read, SpaScopes.Admin],
         ["security_admin"] = [SpaScopes.Read, SpaScopes.Admin],
         ["integration_service"] = [SpaScopes.Read, SpaScopes.Write, SpaScopes.Schedule, SpaScopes.Commerce, SpaScopes.Inventory],
+        // A registered device (kiosk, provider tablet, desk terminal): its own narrow family, nothing a person holds.
+        ["device"] = [SpaScopes.Device],
     };
 
     public static IReadOnlyCollection<string> Roles => Map.Keys;

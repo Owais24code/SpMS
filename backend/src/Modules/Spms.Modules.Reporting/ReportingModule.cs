@@ -10,8 +10,9 @@ public static class ReportingModule
     public static IServiceCollection AddReportingModule(this IServiceCollection services)
     {
         services.AddSingleton<IModelContributor, ReportingModelContributor>();
+        services.AddScoped<ReportService>();
         return services;
     }
 
-    public static IEndpointRouteBuilder MapReportingModule(this IEndpointRouteBuilder app) => app;
+    public static IEndpointRouteBuilder MapReportingModule(this IEndpointRouteBuilder app) => app.MapReports();
 }

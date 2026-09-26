@@ -12,6 +12,7 @@
 --   principals ...0201 Dana (front desk), ...0202 Morgan (spa manager + platform admin), ...0203-0205 providers,
 --              ...0206 Riley (scheduler), ...0207 Sam (finance + configuration approver), ...0208 Ada (platform admin),
 --              ...0209 Hana (housekeeping), ...0210 Iris (inventory), ...0211 Hugo (HR & compliance); dev logins by first name
+--              ...0212 Marquee connector (login 'marquee'), ...0213 lobby kiosk device (login 'kiosk')
 --   staff      ...0601 Lena, ...0602 Marco, ...0603 Priya, ...0604 Dana, ...0605 Morgan
 --   services   ...0401-0406   rooms ...0501-0506   guests ...0701-0705   appointments ...0801-0805
 --   spare rooms ...1001-1040 and walk-in guests ...2001-2040 (used by the HTTP sweep)
@@ -236,6 +237,46 @@ SELECT b.id::uuid, '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8
                ('01920000-0000-7000-8000-000000001503', '01920000-0000-7000-8000-000000001303', '01920000-0000-7000-8000-000000001101', 'Saleable', 24, 1800),
                ('01920000-0000-7000-8000-000000001504', '01920000-0000-7000-8000-000000001304', '01920000-0000-7000-8000-000000001103', 'Saleable', 30, 1100)) b(id, variant, loc, state, qty, cost)
 ON CONFLICT (inventory_location_balance_id) DO NOTHING;
+
+-- Integrations and devices: the Marquee connector (a service principal with
+-- the integration role) and the lobby kiosk (a registered device). Dev logins
+-- 'marquee' and 'kiosk'; in a deployment both are Entra applications.
+INSERT INTO core.principal (principal_id, tenant_id, principal_type, display_name) VALUES
+  ('01920000-0000-7000-8000-000000000212', '01920000-0000-7000-8000-000000000001', 'Service', 'Marquee connector'),
+  ('01920000-0000-7000-8000-000000000213', '01920000-0000-7000-8000-000000000001', 'Device', 'Riverside lobby kiosk')
+ON CONFLICT (principal_id) DO NOTHING;
+INSERT INTO core.principal_login (principal_login_id, tenant_id, principal_id, login_type, idp_issuer, idp_subject, username, mfa_required) VALUES
+  ('01920000-0000-7000-8000-000000000222', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000212', 'EntraApplication', 'spms-dev', 'marquee', NULL, false),
+  ('01920000-0000-7000-8000-000000000223', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000213', 'EntraApplication', 'spms-dev', 'kiosk', NULL, false)
+ON CONFLICT (idp_issuer, idp_subject) DO NOTHING;
+INSERT INTO workforce.staff (staff_id, tenant_id, principal_id, home_property_id, preferred_name, bookable)
+VALUES ('01920000-0000-7000-8000-000000000612', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000212', NULL, 'Marquee connector', false)
+ON CONFLICT (staff_id) DO NOTHING;
+INSERT INTO workforce.staff_role_assignment (staff_role_assignment_id, tenant_id, property_id, staff_id, role_code, status, approved_by, approved_at)
+VALUES ('01920000-0000-7000-8000-000000000624', '01920000-0000-7000-8000-000000000001', NULL, '01920000-0000-7000-8000-000000000612', 'integration_service', 'Active', '01920000-0000-7000-8000-000000000208', now())
+ON CONFLICT (staff_role_assignment_id) DO NOTHING;
+INSERT INTO core.device_registration (device_registration_id, tenant_id, property_id, principal_id, device_kind, device_name, public_key_spki, status)
+VALUES ('01920000-0000-7000-8000-000000001601', '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8000-000000000101', '01920000-0000-7000-8000-000000000213', 'Kiosk', 'Riverside lobby kiosk', decode(repeat('ab', 64), 'hex'), 'Active')
+ON CONFLICT (device_registration_id) DO NOTHING;
+
+-- Message templates, approved (written by Ada, approved by Morgan). Only
+-- allow-listed variables render (SEC-010).
+INSERT INTO messaging.message_template (message_template_id, tenant_id, property_id, template_code, version_number, channel, locale, purpose,
+                                        subject, body_template, variables, trigger_event, offset_minutes, status, created_by, approved_by, approved_at)
+VALUES
+  ('01920000-0000-7000-8000-000000001701', '01920000-0000-7000-8000-000000000001', NULL, 'booking-confirmed', 1, 'Email', 'en-US', 'Confirmation', 'Your {{serviceName}} at {{propertyName}}',
+   'Hello {{guestName}}, your {{serviceName}} is booked for {{startLocal}}. Confirmation {{confirmationNumber}}.',
+   ARRAY['serviceName','propertyName','guestName','startLocal','confirmationNumber'], 'AppointmentConfirmed', 0, 'Active',
+   '01920000-0000-7000-8000-000000000208', '01920000-0000-7000-8000-000000000202', now()),
+  ('01920000-0000-7000-8000-000000001702', '01920000-0000-7000-8000-000000000001', NULL, 'reminder-day-before', 1, 'Sms', 'en-US', 'Reminder', NULL,
+   '{{propertyName}}: reminder of your {{serviceName}} {{startLocal}}. Reply STOP to opt out.',
+   ARRAY['propertyName','serviceName','startLocal'], 'BeforeStart', -1440, 'Active',
+   '01920000-0000-7000-8000-000000000208', '01920000-0000-7000-8000-000000000202', now()),
+  ('01920000-0000-7000-8000-000000001703', '01920000-0000-7000-8000-000000000001', NULL, 'intake-request', 1, 'Email', 'en-US', 'IntakeRequest', 'Before your {{serviceName}}',
+   'Hello {{guestName}}, please complete your health questionnaire before {{startLocal}}.',
+   ARRAY['guestName','serviceName','startLocal'], 'IntakeDue', -2880, 'Active',
+   '01920000-0000-7000-8000-000000000208', '01920000-0000-7000-8000-000000000202', now())
+ON CONFLICT (message_template_id) DO NOTHING;
 
 -- Commerce: sales tax (code SPA on every service above) at Riverside, and the deposit policy (proposed by Morgan, approved by Sam:
 -- a governed setting is never approved by its author).

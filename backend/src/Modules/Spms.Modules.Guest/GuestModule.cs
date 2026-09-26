@@ -25,6 +25,7 @@ public static class GuestModule
         services.AddScoped<ConsentService>();
         services.AddScoped<PrivacyService>();
         services.AddScoped<IPropertyJob, DelegationExpiryJob>();
+        services.AddScoped<IInboundHandler, MarqueeGuestHandler>();
         return services;
     }
 

@@ -25,6 +25,9 @@ public static class CommerceModule
         services.AddScoped<ISchedulingObserver, DepositForfeitObserver>();
         services.AddScoped<IDepositStatus, DepositStatus>();
         services.AddScoped<IGuestDataContributor, CommerceGuestData>();
+        services.AddSingleton<IMarqueeClient, SimulatedMarquee>();
+        services.AddScoped<IPropertyJob, MarqueeOutboundJob>();
+        services.AddScoped<IInboundHandler, MarqueeCommerceHandler>();
         return services;
     }
 

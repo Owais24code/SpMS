@@ -88,7 +88,8 @@ export class SignIn {
   }
 
   protected async go(): Promise<void> {
-    if (await this.auth.signIn(this.picked())) void this.router.navigateByUrl(this.returnUrl);
+    // A kiosk runs one screen, full-screen; everyone else goes where they were going.
+    if (await this.auth.signIn(this.picked())) void this.router.navigateByUrl(this.picked() === 'kiosk' ? '/kiosk' : this.returnUrl);
   }
 
   protected entra(): void {

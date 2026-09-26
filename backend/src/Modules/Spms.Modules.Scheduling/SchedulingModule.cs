@@ -45,6 +45,7 @@ public static class SchedulingModule
         app.MapAppointments();
         app.MapScheduling();
         app.MapOperations();
+        app.MapKiosk();
         return app;
     }
 }

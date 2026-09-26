@@ -2,12 +2,14 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Spms.Modules.Commerce.Application;
 using Spms.Modules.Commerce.Data;
 using Spms.Modules.Commerce.Payments;
 using Spms.Modules.Scheduling.Domain;
 using Spms.Modules.Scheduling.Endpoints;
+using Spms.Persistence;
 using Spms.SharedKernel;
 using Spms.Web;
 
@@ -78,6 +80,7 @@ public static class CommerceEndpoints
         app.MapPost("/orders/{id:guid}/place", Place);
         app.MapPost("/orders/{id:guid}/void", Void);
         app.MapPost("/orders/{id:guid}/payments", Pay);
+        app.MapGet("/orders/{id:guid}/references", References);
         app.MapPost("/appointments/{id:guid}/deposit", Deposit);
         app.MapGet("/payment-intents/{id:guid}", GetIntent);
         app.MapPost("/payment-intents/{id:guid}/resolve", Resolve);
@@ -208,6 +211,17 @@ public static class CommerceEndpoints
         if (Guard.RequireIfMatch(http, ctx, out var version) is { } noMatch) return noMatch;
         if (await Can(ctx, access, "can_take_payment", ct) is { } refused) return refused;
         return OrderResult(http, ctx, await commerce.VoidAsync(id, version, req.Reason!, ct));
+    }
+
+    /// <summary>The calls SpMS owes (or made to) the system that owns commerce for this order (DEC-002).</summary>
+    private static async Task<IResult> References(HttpContext http, SpmsDbContext db, IAccessDecider access, Guid id, CancellationToken ct)
+    {
+        var ctx = RequestContext.From(http);
+        if (Guard.RequireScope(ctx, SpaScopes.Commerce) is { } denied) return denied;
+        if (await Can(ctx, access, "can_read_payment_status", ct) is { } refused) return refused;
+        var rows = await db.Set<CommerceReferenceRow>().AsNoTracking().Where(r => r.CommerceOrderId == id).OrderBy(r => r.CreatedAt).ToListAsync(ct);
+        return Results.Json(rows.Select(r => new { referenceId = r.ReferenceId, r.OwnerSystem, r.Operation, r.ExternalId, r.Status, r.LastError,
+            createdUtc = r.CreatedAt.ToUniversalTime().ToString("O") }), Spms.Web.Json.Options);
     }
 
     /* -------------------------------- payments ------------------------------- */

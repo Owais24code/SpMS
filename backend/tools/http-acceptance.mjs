@@ -1602,6 +1602,157 @@ await test('a governed setting is proposed by an administrator and approved by a
   eq('Superseded', all.json.find(s => s.settingId === p.json.settingId).status);
 });
 
+/* ------------- messaging, reports, devices, kiosk, integrations ------------- */
+
+async function guestWithEmail(last) {
+  const made = await call('POST', '/guests', { login: 'dana', body: { legalFirstName: 'Sweep', legalLastName: last, email: `${last.toLowerCase()}@example.test`, contactsVerifiedInPerson: true } });
+  if (made.status !== 201) throw new Error(`guest: ${made.status} ${made.text}`);
+  return made.json.guest;
+}
+async function bookFor(guest, name, hhmm, service = SVC.swedish) {
+  const r = await call('POST', '/appointments', { body: { guestId: guest.guestId, guestAlias: guest.displayAlias, serviceId: service, startUtc: ny(hhmm), roomId: R(`r-${name}`) } });
+  if (r.status !== 201) throw new Error(`booking ${name}: ${r.status} ${r.text}`);
+  return r.json;
+}
+const runJobs = () => call('POST', '/dev/jobs/run', { scopes: '' });
+
+await test('a template may use only allow-listed variables and is approved by someone other than its author', async () => {
+  const code = `sweep-${uniq()}`;
+  const leaky = await call('POST', '/messaging/templates', { login: 'ada', body: { templateCode: code, channel: 'Email', purpose: 'Transactional', subject: 'Hi',
+    bodyTemplate: 'Your answers: {{intake.pregnant}}' } });
+  eq(422, leaky.status, 'a template reached intake content');
+  if (FGA) eq(403, (await call('POST', '/messaging/templates', { login: 'dana', body: { templateCode: code, channel: 'Sms', purpose: 'Transactional', bodyTemplate: 'x' } })).status);
+  const draft = await call('POST', '/messaging/templates', { login: 'ada', body: { templateCode: code, channel: 'Sms', purpose: 'Transactional', bodyTemplate: 'See you at {{propertyName}}, {{guestName}}.' } });
+  eq(201, draft.status, draft.text);
+  eq('Draft', draft.json.status);
+  eq(403, (await call('POST', `/messaging/templates/${draft.json.templateId}/approve`, { login: 'ada', headers: { 'If-Match': draft.json.eTag } })).status, 'the author approved');
+  const approved = await call('POST', `/messaging/templates/${draft.json.templateId}/approve`, { login: 'morgan', headers: { 'If-Match': draft.json.eTag } });
+  eq('Active', approved.json.status, approved.text);
+  const v2 = await call('POST', '/messaging/templates', { login: 'ada', body: { templateCode: code, channel: 'Sms', purpose: 'Transactional', bodyTemplate: 'Welcome to {{propertyName}}.' } });
+  eq(2, v2.json.versionNumber);
+  await call('POST', `/messaging/templates/${v2.json.templateId}/approve`, { login: 'morgan', headers: { 'If-Match': v2.json.eTag } });
+  const all = await call('GET', `/messaging/templates?code=${code}`, { login: 'morgan' });
+  eq('Retired', all.json.find(t => t.versionNumber === 1).status);
+});
+
+await test('the desk sends the intake request to a booked guest; it goes out rendered, once, and a delivery report lands', async () => {
+  const last = `Msg${uniq()}`;
+  const g = await guestWithEmail(last);
+  const a = await bookFor(g, `msg-${last}`, '19:00', SVC.deep);
+  const key = `sweep-msg-${uniq()}`;
+  const sent = await call('POST', '/messaging/messages', { login: 'dana', headers: { 'Idempotency-Key': key }, body: { appointmentId: a.appointmentId, templateCode: 'intake-request' } });
+  eq(201, sent.status, sent.text);
+  ok(!sent.text.includes('@example.test'), 'the address came back');
+  const again = await call('POST', '/messaging/messages', { login: 'dana', headers: { 'Idempotency-Key': key }, body: { appointmentId: a.appointmentId, templateCode: 'intake-request' } });
+  eq(sent.json.messageId, again.json.messageId, 'the retry made a second message');
+  await runJobs();
+  const list = await call('GET', `/messaging/messages?appointmentId=${a.appointmentId}`, { login: 'dana' });
+  const m = list.json.find(x => x.messageId === sent.json.messageId);
+  eq('Sent', m.status, JSON.stringify(m));
+  ok(list.json.some(x => x.messageId !== sent.json.messageId), 'the automatic confirmation was not scheduled');
+  const outbox = await call('GET', '/dev/messages', { scopes: '' });
+  ok(outbox.json.some(o => o.address === `${last.toLowerCase()}@example.test` && o.subject === 'Before your Deep tissue 90' && !o.body.includes('{{')), 'no rendered message went out');
+  if (FGA) eq(403, (await call('POST', '/messaging/callbacks/sim', { login: 'dana', body: { providerMessageId: m.providerMessageId, status: 'Delivered' } })).status);
+  const cb = await call('POST', '/messaging/callbacks/sim', { login: 'marquee', body: { providerMessageId: m.providerMessageId, status: 'Delivered' } });
+  eq(true, cb.json.accepted, cb.text);
+  eq('Delivered', (await call('GET', `/messaging/messages?appointmentId=${a.appointmentId}`, { login: 'dana' })).json.find(x => x.messageId === sent.json.messageId).status);
+});
+
+await test('the kiosk finds today\'s booking only by confirmation number and last name, and checks the guest in once', async () => {
+  const last = `Kiosk${uniq()}`;
+  const g = await guestWithEmail(last);
+  const a = await bookFor(g, `kiosk-${last}`, '19:30');
+  eq(403, (await call('POST', '/kiosk/lookup', { login: 'dana', body: { confirmationNumber: a.confirmationNumber, lastName: last } })).status, 'the desk used the kiosk API');
+  eq(404, (await call('POST', '/kiosk/lookup', { login: 'kiosk', body: { confirmationNumber: a.confirmationNumber, lastName: 'Wrong' } })).status);
+  const found = await call('POST', '/kiosk/lookup', { login: 'kiosk', body: { confirmationNumber: a.confirmationNumber.toLowerCase(), lastName: last.toUpperCase() } });
+  eq(200, found.status, found.text);
+  eq(true, found.json.canCheckIn);
+  ok(!found.text.includes(last), 'the kiosk echoed the name');
+  const inn = await call('POST', '/kiosk/check-in', { login: 'kiosk', body: { appointmentId: a.appointmentId, confirmationNumber: a.confirmationNumber, lastName: last } });
+  eq(200, inn.status, inn.text);
+  eq('CheckedIn', inn.json.status);
+  eq(409, (await call('POST', '/kiosk/check-in', { login: 'kiosk', body: { appointmentId: a.appointmentId, confirmationNumber: a.confirmationNumber, lastName: last } })).status);
+});
+
+await test('reports: operations for the manager, takings for finance, each run hashed and exportable by who may export it', async () => {
+  const ops = await call('POST', '/reports/operations.daily/runs', { body: {} });
+  eq(201, ops.status, ops.text);
+  eq(true, ops.json.resultIntact);
+  ok(ops.json.result.tables.some(t => t.name === 'by_status' && t.rows.length > 0), 'no bookings in the report');
+  ok(!ops.text.includes('@example'), 'a report carried an address');
+  if (FGA) eq(403, (await call('POST', '/reports/finance.daily/runs', { login: 'dana', body: {} })).status, 'the desk read the takings');
+  const fin = await call('POST', '/reports/finance.daily/runs', { login: 'sam', body: {} });
+  eq(201, fin.status, fin.text);
+  const csv = await call('GET', `/reports/runs/${ops.json.runId}/export`);
+  eq(200, csv.status, csv.text);
+  ok(csv.headers.get('content-type').startsWith('text/csv'), csv.headers.get('content-type'));
+  eq(ops.json.resultSha256, csv.headers.get('x-report-sha256'));
+  if (FGA) eq(403, (await call('GET', `/reports/runs/${fin.json.runId}/export`)).status, 'the manager exported the takings');
+});
+
+await test('a device is registered and activated by the manager, and revocation ends its access', async () => {
+  const key = Buffer.from(Array.from({ length: 65 }, (_, i) => i)).toString('base64');
+  if (FGA) eq(403, (await call('POST', '/devices', { login: 'dana', body: { deviceKind: 'ProviderTablet', deviceName: 'Tab', publicKeySpki: key } })).status);
+  const reg = await call('POST', '/devices', { body: { deviceKind: 'ProviderTablet', deviceName: `Sweep tablet ${uniq()}`, publicKeySpki: key } });
+  eq(201, reg.status, reg.text);
+  eq('Pending', reg.json.status);
+  const on = await call('POST', `/devices/${reg.json.deviceId}/activate`, { headers: { 'If-Match': reg.json.eTag } });
+  eq('Active', on.json.status, on.text);
+  const off = await call('POST', `/devices/${reg.json.deviceId}/revoke`, { headers: { 'If-Match': on.json.eTag } });
+  eq('Revoked', off.json.status, off.text);
+  eq(204, (await call('POST', '/devices/heartbeat', { login: 'kiosk' })).status, 'the kiosk could not report in');
+});
+
+await test('Marquee mode: payment ownership is switched by two people, the cart is opened at Marquee, and its settlement pays the order once', async () => {
+  const p = await call('POST', '/integrations/ownership', { login: 'ada', body: { capabilityCode: 'Payment', ownerSystem: 'Marquee' } });
+  eq(201, p.status, p.text);
+  eq(403, (await call('POST', `/integrations/ownership/${p.json.ownershipId}/approve`, { login: 'ada', headers: { 'If-Match': p.json.eTag } })).status, 'the proposer approved');
+  const on = await call('POST', `/integrations/ownership/${p.json.ownershipId}/approve`, { login: 'sam', headers: { 'If-Match': p.json.eTag } });
+  eq('Active', on.json.status, on.text);
+  try {
+    const cart = await call('POST', '/orders', { login: 'dana', body: {} });
+    eq(201, cart.status, cart.text);
+    eq('Delegated', cart.json.status);
+    eq('Marquee', cart.json.ownerSystem);
+    await runJobs();
+    const refs = await call('GET', `/orders/${cart.json.orderId}/references`, { login: 'dana' });
+    const ref = refs.json.find(r => r.operation === 'CreateCart');
+    eq('Sent', ref.status, JSON.stringify(refs.json));
+    const eventId = crypto.randomUUID();
+    const settle = { eventId, eventType: 'marquee.cart.settled', payload: { cartReference: ref.externalId, totalMinor: 15000, receiptNumber: 'MQ-R-1' } };
+    if (FGA) eq(403, (await call('POST', '/integrations/inbound/marquee', { login: 'dana', body: settle })).status, 'the desk posted a Marquee event');
+    const first = await call('POST', '/integrations/inbound/marquee', { login: 'marquee', body: settle });
+    eq(201, first.status, first.text);
+    eq('Processed', first.json.outcome);
+    const dup = await call('POST', '/integrations/inbound/marquee', { login: 'marquee', body: settle });
+    eq('Duplicate', dup.json.outcome);
+    const order = await call('GET', `/orders/${cart.json.orderId}`, { login: 'dana' });
+    eq('Paid', order.json.status);
+    eq('MQ-R-1', order.json.receiptNumber);
+  } finally {
+    const back = await call('POST', '/integrations/ownership', { login: 'ada', body: { capabilityCode: 'Payment', ownerSystem: 'Spa' } });
+    await call('POST', `/integrations/ownership/${back.json.ownershipId}/approve`, { login: 'sam', headers: { 'If-Match': back.json.eTag } });
+  }
+  eq('Draft', (await call('POST', '/orders', { login: 'dana', body: {} })).json.status, 'the spa did not take payment back');
+});
+
+await test('a Marquee guest is created once with its mapping and updated afterwards', async () => {
+  const key = `mq-${uniq()}`;
+  const ev = (last) => ({ eventId: crypto.randomUUID(), eventType: 'marquee.guest.upserted', payload: { guestKey: key, firstName: 'Mara', lastName: last, email: `${key}@example.test` } });
+  const made = await call('POST', '/integrations/inbound/marquee', { login: 'marquee', body: ev('Quill') });
+  eq(201, made.status, made.text);
+  ok(made.json.detail.startsWith('Created'), made.text);
+  const upd = await call('POST', '/integrations/inbound/marquee', { login: 'marquee', body: ev('Quillon') });
+  ok(upd.json.detail.startsWith('Updated'), upd.text);
+  const maps = await call('GET', '/integrations/mappings?entityType=Guest', { login: 'ada' });
+  eq(1, maps.json.filter(m => m.sourceKey === key).length);
+  const unknown = await call('POST', '/integrations/inbound/marquee', { login: 'marquee', body: { eventId: crypto.randomUUID(), eventType: 'marquee.unknown', payload: {} } });
+  eq('NoHandler', unknown.json.outcome);
+  const health = await call('GET', '/integrations/outbox', { login: 'ada' });
+  eq(200, health.status, health.text);
+  ok(typeof health.json.pending === 'number', health.text);
+});
+
 /* ------------------------------ summary ------------------------------ */
 
 console.log();

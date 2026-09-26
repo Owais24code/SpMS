@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Spms.Modules.Core.Data;
 using Spms.Modules.Core.Infrastructure;
 using Spms.Modules.Core.Settings;
+using Spms.Modules.Core.Integrations;
 using Spms.Persistence;
 using Spms.SharedKernel;
 using Spms.Web;
@@ -19,6 +20,8 @@ public static class CoreModule
         services.AddScoped<IAuditSink, EfAuditSink>();
         services.AddScoped<SettingsReader>();
         services.AddScoped<SettingsAdmin>();
+        services.AddScoped<DeviceService>();
+        services.AddScoped<IntegrationService>();
         services.AddScoped<IPropertyJob, SettingActivationJob>();
         services.AddScoped<IOutbox, EfOutbox>();
         services.AddScoped<AuditQueries>();
@@ -37,6 +40,7 @@ public static class CoreModule
             return Results.Json(new { items, count = items.Count }, Json.Options);
         });
         app.MapSettings();
+        app.MapIntegrations();
         return app;
     }
 }

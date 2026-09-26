@@ -18,6 +18,8 @@ public sealed record ResolvedIdentity(
 {
     public IEnumerable<string> RoleCodes => Roles.Select(r => r.Role).Distinct(StringComparer.Ordinal);
 
+    public ActorType ActorType => PrincipalType switch { "Service" => ActorType.Service, "Device" => ActorType.Device, _ => ActorType.Staff };
+
     /// <summary>The property to act at: the requested one if allowed, else home, else the first.</summary>
     public Guid? PickProperty(Guid? requested)
     {
@@ -129,6 +131,18 @@ public sealed class PrincipalResolver(NpgsqlDataSource dataSource, PersistenceOp
             cmd.Parameters.AddWithValue("s", sid);
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct)) roles.Add(new RoleGrant(r.GetString(0), r.IsDBNull(1) ? null : r.GetGuid(1)));
+        }
+
+        // A device acts at the one property it is registered at, and only while its registration is Active.
+        if (type == "Device")
+        {
+            await using var cmd = new NpgsqlCommand(
+                "SELECT property_id, device_kind FROM core.device_registration WHERE principal_id = @p AND status = 'Active'", conn, tx);
+            cmd.Parameters.AddWithValue("p", principal);
+            await using var r = await cmd.ExecuteReaderAsync(ct);
+            if (!await r.ReadAsync(ct)) return null;
+            home = r.GetGuid(0);
+            roles.Add(new RoleGrant("device", home));
         }
 
         await using (var touch = new NpgsqlCommand("""

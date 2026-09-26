@@ -120,7 +120,7 @@ export class AppLayout {
       '/app/schedule':       [SCOPES.schedule],
       '/app/check-in':       [SCOPES.guestWrite],
       '/app/treatments':     [SCOPES.healthRestricted],
-      '/app/messaging':      [SCOPES.messaging],
+      '/app/messaging':      [SCOPES.messaging, SCOPES.guestWrite],
       '/app/inventory':      [SCOPES.inventory],
       '/app/devices':        [SCOPES.device],
       '/app/staff':          [SCOPES.workforceRead],
@@ -128,7 +128,7 @@ export class AppLayout {
       '/app/checkout':       [SCOPES.commerce],
       '/app/reports':        [SCOPES.read],
       '/app/guests':         [SCOPES.guestWrite],
-      '/app/integrations':   [SCOPES.admin],
+      '/app/integrations':   [SCOPES.admin, SCOPES.commerce],
     };
     const scopes = need[item.path];
     return !scopes || this.auth.hasAny(scopes);
