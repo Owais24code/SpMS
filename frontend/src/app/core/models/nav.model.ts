@@ -35,6 +35,7 @@ export const WORKSPACE_NAV: readonly NavGroup[] = [
   {
     label: 'Guests',
     items: [
+      { label: 'Guests',       path: '/app/guests',       icon: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1' },
       { label: 'Booking',      path: '/app/booking',      icon: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M12 7v5l3.2 2' },
       { label: 'Appointments', path: '/app/appointments', icon: 'M7 4h10a2 2 0 0 1 2 2v14l-7-3.5L5 20V6a2 2 0 0 1 2-2z' },
       { label: 'Waitlist',     path: '/app/waitlist',     icon: 'M8 6h12M8 12h12M8 18h8M4 6h.01M4 12h.01M4 18h.01' },

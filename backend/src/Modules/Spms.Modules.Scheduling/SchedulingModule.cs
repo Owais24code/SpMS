@@ -32,6 +32,7 @@ public static class SchedulingModule
         services.AddScoped<VisitService>();
         services.AddScoped<WaitlistService>();
         services.AddScoped<TurnaroundService>();
+        services.AddScoped<IGuestDataContributor, SchedulingGuestData>();
 
         services.AddScoped<IPropertyJob, HoldExpiryJob>();
         services.AddScoped<IPropertyJob, PreflightExpiryJob>();

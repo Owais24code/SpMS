@@ -1199,6 +1199,139 @@ await test('a hold is released by the expiry job once it runs out (dev job trigg
   eq('Held', (await call('GET', `/appointments/${h.appointmentId}`)).json.status);
 });
 
+/* -------------------------- guests and intake (batch 4) -------------------------- */
+
+const FGA = process.env.SPMS_SWEEP_FGA === '1';
+const stamp = Date.now().toString(36);
+
+async function newGuest(first, last, extra = {}) {
+  const r = await call('POST', '/guests', { login: 'dana', body: { legalFirstName: first, legalLastName: last, contactsVerifiedInPerson: true, ...extra } });
+  if (r.status !== 201) throw new Error(`guest ${first}: ${r.status} ${r.text}`);
+  return r.json;
+}
+
+await test('a guest is created with a privacy alias and found by email; the date of birth is never served', async () => {
+  const email = `ivy.${stamp}@example.com`;
+  const g = await newGuest('Ivy', 'Park', { email, birthDate: '1991-02-03' });
+  eq('Ivy P.', g.guest.displayAlias);
+  eq(false, g.guest.isMinor);
+  ok(!('birthDate' in g.guest), 'birth date leaked');
+  ok(g.guest.contacts[0].displayHint.startsWith('i***@'), 'contact not masked');
+  const found = await call('GET', `/guests?q=${encodeURIComponent(email.toUpperCase())}`, { login: 'dana' });
+  eq(200, found.status);
+  eq(g.guest.guestId, found.json[0]?.guestId);
+  eq(422, (await call('GET', '/guests?q=a', { login: 'dana' })).status);
+});
+
+await test('preferences refuse health data and an update needs If-Match', async () => {
+  const g = (await newGuest('Jon', 'Reed')).guest;
+  eq(422, (await call('PATCH', `/guests/${g.guestId}`, { login: 'dana', body: { preferences: { pressure: 'Firm' } } })).status);
+  const bad = await call('PATCH', `/guests/${g.guestId}`, { login: 'dana', body: { preferences: { allergies: 'nuts' } }, headers: { 'If-Match': g.eTag } });
+  eq(422, bad.status);
+  const good = await call('PATCH', `/guests/${g.guestId}`, { login: 'dana', body: { preferredName: 'Jonny', preferences: { pressure: 'Firm' } }, headers: { 'If-Match': g.eTag } });
+  eq(200, good.status, good.text);
+  eq('Firm', good.json.preferences.pressure);
+});
+
+await test('a duplicate at creation is a merge candidate; only a manager decides, never the proposer', async () => {
+  const email = `kim.${stamp}@example.com`;
+  const a = await newGuest('Kim', 'Lowe', { email });
+  const b = await newGuest('Kimberly', 'Lowe', { email });
+  eq(a.guest.guestId, b.possibleDuplicates[0]);
+  const proposed = await call('POST', '/guest-merge-cases', { login: 'dana', body: { survivingGuestId: a.guest.guestId, duplicateGuestId: b.guest.guestId } });
+  // The creation already raised one for this pair.
+  eq(409, proposed.status);
+  const cases = await call('GET', '/guest-merge-cases?status=Candidate', { login: 'dana' });
+  const c = cases.json.find(m => m.duplicateGuestId === b.guest.guestId);
+  ok(c, 'no candidate raised at creation');
+  const desk = await call('POST', `/guest-merge-cases/${c.mergeCaseId}/decision`, { login: 'dana', body: { decision: 'Approve' }, headers: { 'If-Match': c.eTag } });
+  if (FGA) eq(403, desk.status, 'the front desk decided a merge');
+  const mgr = await call('POST', `/guest-merge-cases/${c.mergeCaseId}/decision`, { body: { decision: 'Approve', reason: 'same email, same surname' }, headers: { 'If-Match': c.eTag } });
+  if (desk.status === 200) return; // permissive run: dana approved, which is fine without OpenFGA
+  eq(200, mgr.status, mgr.text);
+  const done = await call('POST', `/guest-merge-cases/${c.mergeCaseId}/execute`, { headers: { 'If-Match': mgr.json.eTag } });
+  eq(200, done.status, done.text);
+  eq('Merged', (await call('GET', `/guests/${b.guest.guestId}`, { login: 'dana' })).json.status);
+});
+
+await test('delegation, consent and a privacy request on one guest', async () => {
+  const guest = (await newGuest('Lea', 'Moor')).guest;
+  const assistant = (await newGuest('Max', 'Moor')).guest;
+  const until = new Date(Date.now() + 30 * 86400_000).toISOString();
+  const d = await call('POST', `/guests/${guest.guestId}/delegations`, { login: 'dana', body: {
+    delegateGuestId: assistant.guestId, allowedActions: ['Book', 'ViewItinerary'], informationVisibility: 'ItineraryOnly',
+    evidenceReference: 'signed at desk', effectiveToUtc: until } });
+  eq(201, d.status, d.text);
+  eq(422, (await call('POST', `/guests/${guest.guestId}/delegations`, { login: 'dana', body: {
+    delegateGuestId: assistant.guestId, allowedActions: ['Book'], informationVisibility: 'Everything', evidenceReference: 'x', effectiveToUtc: until } })).status);
+
+  const c = await call('POST', `/guests/${guest.guestId}/consents`, { login: 'dana', body: {
+    purpose: 'Marketing', channel: 'Email', templateId: 'mkt-email', templateVersion: 1, evidence: 'ticked on the tablet' } });
+  eq(201, c.status, c.text);
+  ok(!('evidence' in c.json), 'consent evidence served');
+  eq(200, (await call('POST', `/consents/${c.json.consentId}/revoke`, { login: 'dana', headers: { 'If-Match': c.json.eTag } })).status);
+
+  const p = await call('POST', `/guests/${guest.guestId}/privacy-requests`, { login: 'dana', body: { requestType: 'Access' } });
+  eq(201, p.status, p.text);
+  eq(403, (await call('GET', '/privacy-requests', { login: 'dana' })).status);
+  const v = await call('POST', `/privacy-requests/${p.json.privacyRequestId}/transitions`, { body: { to: 'Verified' }, headers: { 'If-Match': p.json.eTag } });
+  eq(200, v.status, v.text);
+  const x = await call('GET', `/privacy-requests/${p.json.privacyRequestId}/export`);
+  eq(200, x.status, x.text);
+  eq('Lea', x.json.data.profile.legalFirstName);
+  ok(x.json.data.scheduling && x.json.data.intake !== undefined, 'a module did not contribute to the export');
+});
+
+await test('intake: the guest submits, the desk sees status only, the assigned provider reads the summary and it locks', async () => {
+  const email = `nia.${stamp}@example.com`;
+  const g = (await newGuest('Nia', 'Hart', { email })).guest;
+  const start = new Date(Date.now() + 2 * 86400_000).toISOString();
+  const a = await call('POST', '/appointments', { body: {
+    guestId: g.guestId, serviceId: SVC.deep, startUtc: start, providerId: PROV.lena, roomId: R('r-intake') } });
+  eq(201, a.status, a.text);
+
+  const link = await call('POST', `/guests/${g.guestId}/magic-links`, { login: 'dana', body: { contactPointId: g.contacts[0].contactPointId, purpose: 'CompleteIntake' } });
+  const session = await call('POST', '/guest/sessions', { login: null, scopes: '', body: { token: link.json.devToken } });
+  eq(200, session.status, session.text);
+  const bearer = session.json.accessToken;
+
+  const forms = await call('GET', '/guest/intake', { bearer });
+  eq(200, forms.status, forms.text);
+  const f = forms.json.find(x => x.appointmentId === a.json.appointmentId);
+  ok(f, 'no form assigned for the booking');
+  const answers = { pregnant: false, conditions: false, allergies: 'almond oil', medications: 'sweep-private-med', emergency_contact: 'Kai 555-0100', accurate: true };
+  const incomplete = await call('PUT', `/guest/intake/${f.submissionId}`, { bearer, body: { answers: { pregnant: false }, submit: true }, headers: { 'If-Match': f.eTag } });
+  eq(422, incomplete.status);
+  const saved = await call('PUT', `/guest/intake/${f.submissionId}`, { bearer, body: { answers, submit: true }, headers: { 'If-Match': f.eTag } });
+  eq(200, saved.status, saved.text);
+  eq('Submitted', saved.json.status);
+
+  const status = await call('GET', `/appointments/${a.json.appointmentId}/intake/status`, { login: 'dana' });
+  eq(200, status.status, status.text);
+  eq('Submitted', status.json.status);
+  ok(!status.text.includes('almond'), 'the desk saw an answer');
+  eq(403, (await call('GET', `/appointments/${a.json.appointmentId}/intake`, { login: 'dana' })).status);
+
+  const summary = await call('GET', `/appointments/${a.json.appointmentId}/intake`, { login: 'lena' });
+  eq(200, summary.status, summary.text);
+  ok(summary.json.items.some(i => i.key === 'allergies'), 'summary missing allergies');
+  ok(!summary.text.includes('sweep-private-med'), 'the provider saw a non-summary answer');
+  if (FGA) eq(403, (await call('GET', `/appointments/${a.json.appointmentId}/intake`, { login: 'marco' })).status, 'an unassigned provider read the summary');
+
+  const ack = await call('POST', `/appointments/${a.json.appointmentId}/intake/acknowledge`, { login: 'lena' });
+  eq(200, ack.status, ack.text);
+  eq('Locked', ack.json.status);
+  const late = await call('PUT', `/guest/intake/${f.submissionId}`, { bearer, body: { answers, submit: true }, headers: { 'If-Match': saved.json.eTag } });
+  eq(409, late.status, 'a locked form was changed');
+
+  const note = await call('POST', `/appointments/${a.json.appointmentId}/notes`, { login: 'lena', body: { content: 'Worked the upper back.', templateCode: 'SOAP' } });
+  eq(201, note.status, note.text);
+  const notes = await call('GET', `/appointments/${a.json.appointmentId}/notes`, { login: 'lena' });
+  eq('Worked the upper back.', notes.json[0].content);
+  eq(403, (await call('GET', `/appointments/${a.json.appointmentId}/notes`, { login: 'dana' })).status);
+  if (FGA) eq(403, (await call('GET', `/appointments/${a.json.appointmentId}/notes`, { login: 'marco' })).status, 'an unassigned provider read notes');
+});
+
 /* ------------------------------ summary ------------------------------ */
 
 console.log();

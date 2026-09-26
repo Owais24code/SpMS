@@ -11,9 +11,11 @@ const signIn = async (page: import('@playwright/test').Page, role: string) => {
 test('the desk checks a guest in against the server, and the row turns Checked in', async ({ page }) => {
   const morgan = await staff('morgan');
   const alias = `E2E ${Date.now() % 100000}`;
+  const guest = (await (await (await staff('dana')).post('/guests', {
+    data: { legalFirstName: `Arr${Date.now().toString(36)}`, legalLastName: 'Ival' } })).json()).guest;
   const made = await morgan.post('/appointments', {
     headers: { 'Idempotency-Key': key() },
-    data: { guestId: U(2040), guestAlias: alias, serviceId: SVC.facial, startUtc: lateTodayUtc() },
+    data: { guestId: guest.guestId, guestAlias: alias, serviceId: SVC.facial, startUtc: lateTodayUtc() },
   });
   expect(made.status(), await made.text()).toBe(201);
   const a = await made.json();

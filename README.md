@@ -40,7 +40,7 @@ SpMS/
 
 **Dev logins.** In Development the API accepts `X-Spa-Login: <handle>` and resolves it through
 the same principal resolver an Entra token uses: roles, properties and scopes come from the
-database. The seeded handles are `dana` (front desk, Riverside), `hana` (housekeeping, Riverside), `morgan` (spa manager and
+database. The dev seed also publishes a health intake form. The seeded handles are `dana` (front desk, Riverside), `hana` (housekeeping, Riverside), `morgan` (spa manager and
 platform admin, both properties), `riley` (scheduler), `lena` (provider), `sam` (finance) and
 `ada` (platform admin). The sign-in screen offers them in `demo` mode.
 
@@ -346,15 +346,15 @@ Work is delivered in eight batches. Each is one commit on `main`.
 | 1 | Backend foundation: EF Core on the 61-table R1 schema, three-layer tenancy, module split | Done |
 | 2 | Identity and authorization: Entra JWT, principal resolution, OpenFGA checks and tuple sync, guest magic links; MSAL / dev-login sign-in, property switcher, guest landing | Done |
 | 3 | Scheduling completion: tenant-wide CON-005, undo window, all-or-nothing bulk move, hold expiry, visits, waitlist, room turnover; desk check-in, undo, waitlist and turnover screens on the API | Done |
-| 4 | Guests and intake: profiles, merge, delegation, consent, privacy; intake with envelope encryption | Planned |
+| 4 | Guests and intake: profiles and search, reviewed merge and split, delegation, consent, privacy requests with export and erasure; intake and treatment notes under `spms_intake` with envelope encryption; Guests, live booking, provider tablet and guest intake screens | Done |
 | 5 | Commerce and payments: orders, deposits, refunds with dual approval, provider-agnostic port | Planned |
 | 6 | Catalogue, resources, workforce, inventory CRUD and settings approval | Planned |
 | 7 | Messaging, reporting, devices, integrations, Marquee mode | Planned |
 | 8 | Operating mode, search, live board, partition/retention jobs, API + PostgreSQL bicep, observability | Planned |
 
-**Verified (batch 3):** backend 204/204 tests against PostgreSQL 16 and OpenFGA 1.10.2; HTTP
-sweep 95/95 in permissive and real-FGA modes; web unit tests (vitest) 10/10 and Playwright e2e
-9/9 (sign-in, property switch, guest magic link, desk check-in, room turnover, waitlist offer).
+**Verified (batch 4):** backend 213/213 tests against PostgreSQL 16 and OpenFGA 1.10.2; HTTP
+sweep 100/100 in permissive and real-FGA modes; `fga model test` 12/12 tests (103 checks); web
+unit tests 10/10; Playwright e2e 12/12.
 
 **Scheduling operations (batch 3):**
 
@@ -376,6 +376,31 @@ sweep 95/95 in permissive and real-FGA modes; web unit tests (vitest) 10/10 and 
 - **Room turnover** (`/turnaround`): a completed treatment creates a Turnover task. Housekeeping
   (`spa.inventory` plus `can_update_room_readiness`) completes it. `/front-desk/arrivals` reports the
   room as not ready while the task is open.
+
+**Guests and intake (batch 4):**
+
+- **Profiles** (`/guests`). Email and phone are searched through a keyed hash and never decrypted to
+  search. Guests are shown by a privacy alias ("Ava R.") and a public queue id. The desk sees whether a
+  guest is a minor, never the date of birth. Preferences are an allow-list of operational keys, so
+  health information is refused there; it belongs to intake.
+- **Merge** (`/guest-merge-cases`, IDN-001). A likely duplicate at creation becomes a candidate.
+  `can_approve_guest_merge` (spa manager) decides, and the proposer never can. A merge moves the
+  duplicate's contact points and records which ones, so a split moves exactly those back.
+- **Delegation** (IDN-003) has explicit actions, properties, limit, visibility and expiry, with
+  evidence. It becomes conditional OpenFGA tuples through the outbox, and expiry is a job.
+- **Consent** evidence is encrypted and immutable (a database trigger); revocation is the only change.
+- **Privacy requests** (IDN-006). The desk logs them; the tenant's privacy role
+  (`can_handle_privacy_request`) verifies and fulfils them. Access/Export collects every module's
+  part (`IGuestDataContributor`). Deletion empties the profile, destroys contact values, cancels open
+  waitlist entries and redacts audit payloads through `spms_erasure`. Bookings are kept, and so are
+  intake records, under health-record retention (an open decision on durations).
+- **Intake** (SEC-008). The API role cannot read `intake.*` at all. The intake service switches the
+  transaction to `spms_intake` for its statements. Answers and the provider summary are each sealed
+  with a per-record data key wrapped by the key ring (`EnvelopeCipher`). The desk sees status only,
+  through `scheduling.intake_status()`. The assigned provider sees the summary fields and
+  acknowledges them, and the form then locks. The guest completes the form from a magic link.
+- **Treatment notes** are encrypted, written by the assigned provider, and never edited. An amendment
+  supersedes the note, once, by its author.
 
 **Open decisions (not ours to close):**
 

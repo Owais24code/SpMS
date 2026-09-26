@@ -69,9 +69,16 @@ public static class AuthorizationSetup
                 .Select(p => new { propertyId = p.PropertyId, p.Code, p.Name, p.Timezone, p.OperatingMode })
                 .ToListAsync(ct);
 
+            // The operator's staff record, if any: the provider tablet lists "my" appointments by it.
+            var staffId = ctx.ActorType == Spms.SharedKernel.ActorType.Staff
+                ? await db.Set<Spms.Modules.Workforce.Data.StaffRow>().AsNoTracking()
+                    .Where(s => s.PrincipalId == ctx.PrincipalId).Select(s => (Guid?)s.StaffId).FirstOrDefaultAsync(ct)
+                : null;
+
             return Results.Json(new
             {
                 principalId = ctx.PrincipalId,
+                staffId,
                 displayName = ctx.Actor,
                 actorType = ctx.ActorType.ToString(),
                 tenantId = ctx.TenantId,

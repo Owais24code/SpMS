@@ -126,6 +126,7 @@ export class AppLayout {
       '/app/staff':          [SCOPES.workforceRead],
       '/app/reconciliation': [SCOPES.reconcile],
       '/app/reports':        [SCOPES.read],
+      '/app/guests':         [SCOPES.guestWrite],
       '/app/integrations':   [SCOPES.admin],
     };
     const scopes = need[item.path];

@@ -224,3 +224,24 @@ tests:
         type: appointment
         assertions:
           can_read: []
+
+  - name: guest merge, delegation and privacy rights (IDN-001, IDN-003, IDN-006)
+    check:
+      - user: user:desk
+        object: property:a1
+        assertions: {can_propose_guest_merge: true, can_approve_guest_merge: false, can_manage_delegation: true}
+      - user: user:mgr
+        object: property:a1
+        assertions: {can_propose_guest_merge: true, can_approve_guest_merge: true, can_manage_delegation: true}
+      - user: user:prov
+        object: property:a1
+        assertions: {can_propose_guest_merge: false, can_approve_guest_merge: false, can_manage_delegation: false}
+      - user: user:secadm
+        object: tenant:t1
+        assertions: {can_handle_privacy_request: true}
+      - user: user:admin
+        object: tenant:t1
+        assertions: {can_handle_privacy_request: true}
+      - user: user:fin
+        object: tenant:t1
+        assertions: {can_handle_privacy_request: false}

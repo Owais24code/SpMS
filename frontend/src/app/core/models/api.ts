@@ -162,6 +162,10 @@ export interface CreateAppointmentRequest {
   readonly providerId?: string | null;
   readonly roomId?: string | null;
   readonly reason?: string | null;
+  readonly source?: string;
+  /** Books as Held for this many minutes (1–60), released by the server if not confirmed. */
+  readonly holdMinutes?: number | null;
+  readonly visitId?: string | null;
 }
 
 /** fromRowVersion is required. See preflight-request rationale on the server. */

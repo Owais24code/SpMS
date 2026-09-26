@@ -64,6 +64,11 @@ export class SchedulingApi {
       this.http.get<PageDto<AppointmentDto>>(this.url('/appointments'), { params }));
   }
 
+  /** [spa.read] The calling provider's own appointments for a property day (the tablet's list). */
+  mine(date: string): Promise<PageDto<AppointmentDto>> {
+    return firstValueFrom(this.http.get<PageDto<AppointmentDto>>(this.url('/provider/appointments'), { params: { date } }));
+  }
+
   /**
    * [spa.read] The DTO carries `eTag` as a field, so the response header is
    * not needed to obtain the version — which is why this returns the body.

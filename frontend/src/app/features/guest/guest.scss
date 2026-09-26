@@ -48,3 +48,11 @@
 }
 
 .actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+
+.intake {
+  margin: var(--space-4) 0;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+
+  select { min-height: 44px; padding: var(--space-2); border: 1px solid var(--border-default, var(--border-subtle)); border-radius: var(--radius-sm); background: var(--bg-canvas); color: var(--fg-default); font: inherit; }
+}

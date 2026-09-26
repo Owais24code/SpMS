@@ -59,6 +59,8 @@ type tenant
     define can_propose_configuration: platform_admin
     define can_approve_configuration: configuration_approver
     define can_manage_staff: hr_compliance
+    # IDN-006 privacy requests are tenant-wide (the guest is); erasure is irreversible.
+    define can_handle_privacy_request: security_admin or platform_admin
 
 type property
   relations
@@ -94,6 +96,11 @@ type property
     # guests (the guest row's tenancy is RLS's job; the right is held at the property)
     define can_read_guest_profile: front_desk or spa_manager
     define can_write_guest_profile: front_desk
+    # IDN-001: a merge is proposed at the desk and decided by a manager, never by the proposer.
+    define can_propose_guest_merge: front_desk or spa_manager
+    define can_approve_guest_merge: spa_manager
+    # IDN-003: delegated authority is recorded with evidence at the desk.
+    define can_manage_delegation: front_desk or spa_manager
     define can_read_marketing_fields: marketing
     define can_read_deidentified_guests: operations_analyst
 

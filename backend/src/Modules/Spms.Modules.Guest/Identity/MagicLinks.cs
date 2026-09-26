@@ -111,31 +111,7 @@ public sealed class MagicLinkService(
         return new IssueResult(IssueOutcome.Issued, link.GuestMagicLinkId, expires, options.LogLinks ? token : null);
     }
 
-    /// <summary>
-    /// A guest who has never signed in has no principal yet. One is created on
-    /// the first link, owned by the guest (OpenFGA owner tuple via the outbox).
-    /// </summary>
-    private async Task<Guid> EnsurePrincipalAsync(GuestRow guest, CancellationToken ct)
-    {
-        if (guest.PrincipalId is { } existing) return existing;
-
-        var principal = new PrincipalRow
-        {
-            PrincipalId = Uuid7.New(),
-            PrincipalType = "Guest",
-            DisplayName = guest.DisplayAlias ?? guest.PreferredName ?? "Guest",
-        };
-        // Two saves on purpose: the model carries no navigation between the two
-        // rows, so EF cannot order the insert before the update that points at it.
-        db.Add(principal);
-        await db.SaveChangesAsync(ct);
-        guest.PrincipalId = principal.PrincipalId;
-        await db.SaveChangesAsync(ct);
-
-        outbox.Enqueue(new OutboxEvent(EventTypes.GuestOwnershipChanged, "guest", guest.GuestId, guest.Version,
-            new { principalId = principal.PrincipalId }, TenantWide: true));
-        return principal.PrincipalId;
-    }
+    private Task<Guid> EnsurePrincipalAsync(GuestRow guest, CancellationToken ct) => GuestPrincipals.EnsureAsync(db, outbox, guest, ct);
 
     public sealed record Redeemed(Guid GuestId, Guid TenantId, Guid PrincipalId, string Purpose, string? ScopeEntityType, Guid? ScopeEntityId);
 
@@ -156,4 +132,34 @@ public sealed class MagicLinkService(
     }
 
     private static string Base64Url(byte[] b) => Convert.ToBase64String(b).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+}
+
+public static class GuestPrincipals
+{
+    /// <summary>
+    /// A guest who has never signed in has no principal yet. One is created on
+    /// first need (a magic link, or being named as someone's delegate), owned
+    /// by the guest (OpenFGA owner tuple via the outbox). The guest row must be tracked.
+    /// </summary>
+    public static async Task<Guid> EnsureAsync(SpmsDbContext db, IOutbox outbox, GuestRow guest, CancellationToken ct)
+    {
+        if (guest.PrincipalId is { } existing) return existing;
+
+        var principal = new PrincipalRow
+        {
+            PrincipalId = Uuid7.New(),
+            PrincipalType = "Guest",
+            DisplayName = guest.DisplayAlias ?? guest.PreferredName ?? "Guest",
+        };
+        // Two saves on purpose: the model carries no navigation between the two
+        // rows, so EF cannot order the insert before the update that points at it.
+        db.Add(principal);
+        await db.SaveChangesAsync(ct);
+        guest.PrincipalId = principal.PrincipalId;
+        await db.SaveChangesAsync(ct);
+
+        outbox.Enqueue(new OutboxEvent(EventTypes.GuestOwnershipChanged, "guest", guest.GuestId, guest.Version,
+            new { principalId = principal.PrincipalId }, TenantWide: true));
+        return principal.PrincipalId;
+    }
 }

@@ -167,4 +167,23 @@ SELECT a.id::uuid, '01920000-0000-7000-8000-000000000001', '01920000-0000-7000-8
   JOIN catalog.service s ON s.service_id = a.svc::uuid
 ON CONFLICT (appointment_id) DO NOTHING;
 
+-- The health intake form (SEC-008), published. Summary fields are what the
+-- assigned provider sees; a "yes" on a review field needs a look before treatment.
+INSERT INTO intake.form_definition (form_definition_id, tenant_id, form_code, version_number, title, purpose, schema_json,
+                                    status, published_at, published_by, effective_from)
+VALUES ('01920000-0000-7000-8000-000000000901', '01920000-0000-7000-8000-000000000001', 'health-intake', 1,
+        'Health and treatment questionnaire', 'HealthIntake',
+        '{"fields":[
+           {"key":"pregnant","label":"Are you pregnant or could you be?","type":"boolean","required":true,"summary":true,"review":true},
+           {"key":"conditions","label":"Do you have a heart condition, high blood pressure or a clotting disorder?","type":"boolean","required":true,"summary":true,"review":true},
+           {"key":"allergies","label":"Allergies to oils, nuts or products","type":"text","summary":true,"maxLength":500},
+           {"key":"avoid_areas","label":"Areas to avoid","type":"text","summary":true,"maxLength":300},
+           {"key":"pressure","label":"Preferred pressure","type":"select","options":["Light","Medium","Firm"],"summary":true},
+           {"key":"medications","label":"Current medications","type":"text","maxLength":500},
+           {"key":"emergency_contact","label":"Emergency contact name and number","type":"text","required":true,"maxLength":200},
+           {"key":"accurate","label":"I confirm these answers are accurate","type":"boolean","required":true,"mustBeTrue":true}
+         ]}',
+        'Published', now(), '01920000-0000-7000-8000-000000000202', now())
+ON CONFLICT (form_definition_id) DO NOTHING;
+
 COMMIT;

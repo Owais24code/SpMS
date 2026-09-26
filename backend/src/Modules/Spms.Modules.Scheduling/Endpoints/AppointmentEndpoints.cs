@@ -2,7 +2,9 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Spms.Modules.Workforce.Data;
 using Spms.Web;
 using Spms.SharedKernel;
 using Spms.Modules.Scheduling.Domain;
@@ -20,6 +22,7 @@ public static class AppointmentEndpoints
     {
         app.MapGet("/appointments/{id}", GetOne);
         app.MapGet("/appointments", List);
+        app.MapGet("/provider/appointments", Mine);
         app.MapPost("/appointments", Create);
         app.MapPost("/appointments/{id}/transitions", Transition);
     }
@@ -112,6 +115,34 @@ public static class AppointmentEndpoints
 
         var items = rows.Select(AppointmentDto.From).ToList();
         return Results.Json(new Page<AppointmentDto>(items, total, pageOffset, pageLimit), Json.Options);
+    }
+
+    /* ------------------------------- provider ------------------------------ */
+
+    /// <summary>
+    /// [spa.read] The calling provider's own appointments for a property day —
+    /// the tablet's list. A provider cannot view the board (can_view_board),
+    /// but may read every appointment assigned to them (assigned_provider).
+    /// </summary>
+    private static async Task<IResult> Mine(
+        HttpContext http, IAppointmentRepository repo, IPropertyDirectory properties,
+        Spms.Persistence.SpmsDbContext db, string? date, CancellationToken ct)
+    {
+        var ctx = RequestContext.From(http);
+        if (Guard.RequireScope(ctx, SpaScopes.Read) is { } denied) return denied;
+        if (!DateOnly.TryParse(date ?? "", out var day))
+            return Problem.From(ApiError.ValidationFailed, ctx.CorrelationId, "date is required as yyyy-MM-dd.");
+        var staff = await db.Set<StaffRow>().AsNoTracking()
+            .Where(s => s.PrincipalId == ctx.PrincipalId).Select(s => (Guid?)s.StaffId).FirstOrDefaultAsync(ct);
+        if (staff is null) return Results.Json(new Page<AppointmentDto>([], 0, 0, 0), Json.Options);
+        var profile = await properties.FindAsync(ctx.Tenant(), ctx.Property(), ct);
+        if (profile is null) return Problem.From(ApiError.NotFound, ctx.CorrelationId, "This tenant has no such property.");
+        var from = LocalClock.DayStartUtc(day, profile.TimeZoneId);
+        var to = LocalClock.DayStartUtc(day.AddDays(1), profile.TimeZoneId);
+        var mine = (await repo.ListOverlappingAsync(ctx.Tenant(), ctx.Property(), from, to, ct))
+            .Where(a => a.ProviderId == staff.Value.ToString() && a.Status is not (AppointmentStatus.Cancelled or AppointmentStatus.NoShow))
+            .Select(AppointmentDto.From).ToList();
+        return Results.Json(new Page<AppointmentDto>(mine, mine.Count, 0, mine.Count), Json.Options);
     }
 
     /* -------------------------------- create ------------------------------- */

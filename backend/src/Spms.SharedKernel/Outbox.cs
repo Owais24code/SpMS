@@ -41,6 +41,11 @@ public static class EventTypes
     public const string MessageScheduled = "messaging.message.scheduled.v1";
     public const string StockMoved = "inventory.stock.moved.v1";
     public const string VisitChanged = "scheduling.visit.changed.v1";
+    public const string GuestProfileChanged = "guest.profile.changed.v1";
+    public const string GuestMerged = "guest.merge.changed.v1";
+    public const string ConsentChanged = "guest.consent.changed.v1";
+    public const string PrivacyRequestChanged = "guest.privacy_request.changed.v1";
+    public const string IntakeChanged = "intake.submission.changed.v1";
     public const string WaitlistChanged = "scheduling.waitlist.changed.v1";
     public const string TurnaroundChanged = "scheduling.turnaround.changed.v1";
     public const string PropertyRegistered = "core.property.registered.v1";

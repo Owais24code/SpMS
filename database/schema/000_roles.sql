@@ -40,6 +40,9 @@ ALTER ROLE spms_definer   BYPASSRLS;
 -- PG16 membership without inheritance: spms_app may SET ROLE spms_intake but does
 -- not hold its privileges by default.
 GRANT spms_intake TO spms_app WITH INHERIT FALSE, SET TRUE;
+-- The same for the privacy worker's role: a fulfilled deletion request sets it
+-- for the one redaction call (core.redact_audit_subject) and sets it back.
+GRANT spms_erasure TO spms_app WITH INHERIT FALSE, SET TRUE;
 
 -- The migration role hands SECURITY DEFINER functions to their owner.
 GRANT spms_definer TO spms_owner WITH INHERIT FALSE, SET TRUE;

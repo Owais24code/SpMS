@@ -2,6 +2,7 @@ import { Injectable, computed, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../../../environments/environment';
+import type { GuestIntakeDto } from '../models/guests';
 
 export interface GuestSessionDto {
   readonly accessToken: string;
@@ -58,6 +59,17 @@ export class GuestSession {
 
   me(): Promise<GuestMeDto> {
     return firstValueFrom(this.http.get<GuestMeDto>(`${this.base}/guest/me`));
+  }
+
+  /** The guest's own intake forms for upcoming bookings, with their answers so far. */
+  intake(): Promise<readonly GuestIntakeDto[]> {
+    return firstValueFrom(this.http.get<readonly GuestIntakeDto[]>(`${this.base}/guest/intake`));
+  }
+
+  /** Saves a draft, or submits (every required answer and confirmation present). */
+  saveIntake(submissionId: string, rowVersion: number, answers: Record<string, unknown>, submit: boolean): Promise<GuestIntakeDto> {
+    return firstValueFrom(this.http.put<GuestIntakeDto>(`${this.base}/guest/intake/${submissionId}`, { answers, submit },
+      { headers: { 'If-Match': `"${rowVersion}"` } }));
   }
 
   /** Always resolves the same way, whether or not the address is on file. */

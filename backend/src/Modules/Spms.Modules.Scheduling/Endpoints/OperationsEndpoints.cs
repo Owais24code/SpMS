@@ -390,23 +390,35 @@ public static class OperationsEndpoints
             .ToList();
 
         var notReady = await turnaround.RoomsNotReadyAsync(ct);
-        var ids = rows.Select(a => Guid.Parse(a.AppointmentId)).ToList();
-        var intake = await (from a in db.Set<AppointmentRow>().AsNoTracking()
-                            where ids.Contains(a.AppointmentId)
-                            join s in db.Set<ServiceRow>() on a.ServiceId equals s.ServiceId
-                            select new { a.AppointmentId, s.RequiresIntake, a.IntakeAcknowledgedAt })
-            .ToDictionaryAsync(x => x.AppointmentId, ct);
+        var ids = rows.Select(a => Guid.Parse(a.AppointmentId)).ToArray();
+        var requires = await (from a in db.Set<AppointmentRow>().AsNoTracking()
+                              where ids.Contains(a.AppointmentId)
+                              join s in db.Set<ServiceRow>() on a.ServiceId equals s.ServiceId
+                              select new { a.AppointmentId, s.RequiresIntake })
+            .ToDictionaryAsync(x => x.AppointmentId, x => x.RequiresIntake, ct);
+        // Status only, through the definer function: this role cannot read intake at all (SEC-008).
+        var intake = (await db.Database.SqlQueryRaw<IntakeStatusRow>(
+                "SELECT appointment_id AS \"AppointmentId\", status AS \"Status\" FROM scheduling.intake_status({0})", ids)
+            .ToListAsync(ct)).ToDictionary(x => x.AppointmentId, x => x.Status);
 
         var items = rows.Select(a =>
         {
-            var i = intake.GetValueOrDefault(Guid.Parse(a.AppointmentId));
+            var id = Guid.Parse(a.AppointmentId);
+            var status = intake.GetValueOrDefault(id);
             var dto = AppointmentDto.From(a);
             return new ArrivalDto(a.AppointmentId, a.GuestAlias, a.ServiceName, dto.StartUtc, dto.StartLocal,
                 a.ProviderId, a.RoomId, a.Status.ToString(), a.RowVersion, dto.ETag, a.VisitId, dto.CheckedInUtc,
                 RoomReady: a.RoomId is null || !notReady.Contains(Guid.Parse(a.RoomId)),
-                Intake: i is null || !i.RequiresIntake ? "NotRequired" : i.IntakeAcknowledgedAt is null ? "Pending" : "Complete",
+                Intake: !requires.GetValueOrDefault(id) ? "NotRequired"
+                    : status is "Submitted" or "Locked" or "Reviewed" or "Waived" ? "Complete" : "Pending",
                 Deposit: "NotTracked");
         }).ToList();
         return Results.Json(new { date = day.ToString("yyyy-MM-dd"), timeZone = profile.TimeZoneId, items }, Spms.Web.Json.Options);
     }
+}
+
+internal sealed class IntakeStatusRow
+{
+    public Guid AppointmentId { get; set; }
+    public string Status { get; set; } = "";
 }

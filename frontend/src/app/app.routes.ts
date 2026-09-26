@@ -1,6 +1,7 @@
 import { Routes } from '@angular/router';
 import { authGuard, scopeGuard } from './core/guards/auth.guard';
 import { SCOPES } from './core/models/contract';
+import { environment } from '../environments/environment';
 
 /** Public marketing surface. */
 const siteRoutes: Routes = [
@@ -23,8 +24,16 @@ const workspaceRoutes: Routes = [
   { path: '',               title: 'Dashboard — SpMS',      loadComponent: () => import('./features/dashboard/dashboard').then((m) => m.Dashboard) },
   { path: 'schedule',       title: 'Schedule — SpMS',       canActivate: [scopeGuard(SCOPES.schedule)],  loadComponent: () => import('./features/schedule/schedule').then((m) => m.Schedule) },
   { path: 'check-in',       title: 'Check-in — SpMS',       canActivate: [scopeGuard(SCOPES.guestWrite)],     loadComponent: () => import('./features/check-in/check-in').then((m) => m.CheckIn) },
-  { path: 'treatments',     title: 'Treatments — SpMS',     canActivate: [scopeGuard(SCOPES.healthRestricted)],      loadComponent: () => import('./features/treatments/treatments').then((m) => m.Treatments) },
-  { path: 'booking',        title: 'Booking — SpMS',        loadComponent: () => import('./features/booking/booking').then((m) => m.Booking) },
+  // Against the API the provider tablet and the desk booking are their live versions; offline, the demos.
+  { path: 'treatments',     title: 'Treatments — SpMS',     canActivate: [scopeGuard(SCOPES.healthRestricted)],
+    loadComponent: () => environment.useRealApi
+      ? import('./features/treatments/treatments-live').then((m) => m.TreatmentsLive)
+      : import('./features/treatments/treatments').then((m) => m.Treatments) },
+  { path: 'booking',        title: 'Booking — SpMS',
+    loadComponent: () => environment.useRealApi
+      ? import('./features/booking/booking-live').then((m) => m.BookingLive)
+      : import('./features/booking/booking').then((m) => m.Booking) },
+  { path: 'guests',         title: 'Guests — SpMS',         canActivate: [scopeGuard(SCOPES.read)],       loadComponent: () => import('./features/guests/guests').then((m) => m.Guests) },
   { path: 'appointments',   title: 'Appointments — SpMS',   loadComponent: () => import('./features/appointments/appointments').then((m) => m.Appointments) },
   { path: 'waitlist',       title: 'Waitlist — SpMS',       canActivate: [scopeGuard(SCOPES.read)],       loadComponent: () => import('./features/waitlist/waitlist').then((m) => m.Waitlist) },
   { path: 'turnover',       title: 'Room turnover — SpMS',  canActivate: [scopeGuard(SCOPES.read)],       loadComponent: () => import('./features/turnover/turnover').then((m) => m.Turnover) },

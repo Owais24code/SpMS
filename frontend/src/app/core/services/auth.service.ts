@@ -15,6 +15,8 @@ export interface PropertyRef {
 
 export interface Principal {
   readonly principalId: string;
+  /** The operator's staff record (providers list their own appointments by it). */
+  readonly staffId: string | null;
   readonly tenantId: string;
   readonly roleCode: RoleCode;
   readonly roles: readonly string[];
@@ -90,6 +92,7 @@ export type RoleKey = keyof typeof ROLE_PRESETS;
 
 interface MeDto {
   readonly principalId: string;
+  readonly staffId?: string | null;
   readonly displayName: string;
   readonly actorType: string;
   readonly tenantId: string;
@@ -276,6 +279,7 @@ export class AuthService {
     const current = me.properties.find((p) => p.propertyId === me.propertyId) ?? null;
     const user: Principal = {
       principalId: me.principalId,
+      staffId: me.staffId ?? null,
       tenantId: me.tenantId,
       roleCode: primary as RoleCode,
       roles,
@@ -295,7 +299,7 @@ export class AuthService {
   private fromPreset(role: RoleKey): Principal {
     const p = ROLE_PRESETS[role];
     return {
-      principalId: EMPTY, tenantId: EMPTY, roleCode: p.roleCode, roles: [p.roleCode],
+      principalId: EMPTY, staffId: null, tenantId: EMPTY, roleCode: p.roleCode, roles: [p.roleCode],
       name: p.name, initials: initialsOf(p.name), property: p.property, propertyId: null, properties: [],
       roleLabel: p.roleLabel, scopes: p.scopes, source: 'offline',
     };
