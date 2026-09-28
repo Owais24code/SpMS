@@ -4,7 +4,7 @@ import { firstValueFrom } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import type {
   BalanceDto, ClosureDto, CountDto, CredentialDto, HrDto, ItemDto, LaundryBatchDto, LedgerEntryDto, LocationDto, OfferingDto, OfferingRowDto,
-  QualificationDto, RoleAssignmentDto, RoomDto, RosterEntryDto, ServiceDto, SettingDto, StaffDto, VariantDto,
+  QualificationDto, RoleAssignmentDto, RoomDto, RosterEntryDto, ServiceDto, SettingDto, SignInDto, StaffDto, TemporaryPasswordDto, VariantDto,
 } from '../models/reference';
 
 type Q = Record<string, string | number | boolean | undefined | null>;
@@ -48,6 +48,15 @@ export class ReferenceApi {
   staff(): Promise<readonly StaffDto[]> { return this.get('/staff'); }
   createStaff(body: { preferredName: string; bookable?: boolean }): Promise<StaffDto> { return this.send('POST', '/staff', body); }
   updateStaff(id: string, v: number, body: Record<string, unknown>): Promise<StaffDto> { return this.send('PATCH', `/staff/${id}`, body, { rowVersion: v }); }
+  /* local email + password accounts */
+  signIns(): Promise<readonly SignInDto[]> { return this.get('/staff/sign-ins'); }
+  giveLocalSignIn(id: string, v: number, body: { email: string; password?: string }): Promise<TemporaryPasswordDto> {
+    return this.send('POST', `/staff/${id}/local-sign-in`, body, { rowVersion: v });
+  }
+  resetPassword(id: string): Promise<TemporaryPasswordDto> { return this.send('POST', `/staff/${id}/reset-password`, {}); }
+  approveSignUp(id: string, v: number): Promise<StaffDto> { return this.send('POST', `/staff/${id}/approve-sign-up`, {}, { rowVersion: v }); }
+  rejectSignUp(id: string, v: number): Promise<StaffDto> { return this.send('POST', `/staff/${id}/reject-sign-up`, {}, { rowVersion: v }); }
+
   /** Links the person to their Entra account (a security administrator's act). */
   linkSignIn(id: string, v: number, body: { objectId: string; email?: string }): Promise<unknown> {
     return this.send('POST', `/staff/${id}/sign-in`, body, { rowVersion: v });

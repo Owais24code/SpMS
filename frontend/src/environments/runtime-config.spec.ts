@@ -41,4 +41,11 @@ describe('resolveEnvironment', () => {
     expect(env.useRealApi).toBe(true);
     expect(env.authMode).toBe('demo');
   });
+
+  it('keeps local (email + password) sign-in when the API is real, and drops it when there is no API', () => {
+    window.__SPMS_CONFIG__ = { authMode: 'local' };
+    expect(resolveEnvironment(compiled).authMode).toBe('local');
+    window.__SPMS_CONFIG__ = { authMode: 'local', useRealApi: false };
+    expect(resolveEnvironment(compiled).authMode).toBe('offline');
+  });
 });

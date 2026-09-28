@@ -1,4 +1,5 @@
 import { Component, ChangeDetectionStrategy, inject, signal, effect } from '@angular/core';
+import { FormsModule } from '@angular/forms';
 import { PageHeader } from '../../shared/components/page-header/page-header';
 import { ThemeService, type ThemeChoice } from '../../core/services/theme.service';
 import { ToastService } from '../../core/services/toast.service';
@@ -7,7 +8,7 @@ import { AuthService } from '../../core/services/auth.service';
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [PageHeader],
+  imports: [PageHeader, FormsModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <app-page-header
@@ -90,6 +91,22 @@ import { AuthService } from '../../core/services/auth.service';
         </div>
       </div>
 
+      @if (auth.user()?.source === 'local') {
+        <div class="panel">
+          <div class="panel__head"><span class="panel__title">Password</span></div>
+          <div class="panel__body stack">
+            <label>Current password <input id="pw-current" type="password" autocomplete="current-password" [(ngModel)]="pw.current" name="pwc" /></label>
+            <label>New password <input id="pw-next" type="password" autocomplete="new-password" [(ngModel)]="pw.next" name="pwn" /></label>
+            <label>Repeat the new password <input id="pw-repeat" type="password" autocomplete="new-password" [(ngModel)]="pw.repeat" name="pwr" /></label>
+            @if (auth.error(); as err) { <p class="subtle" role="alert">{{ err }}</p> }
+            <button type="button" class="btn btn--secondary" [disabled]="auth.busy() || !pw.current || !pw.next || pw.next !== pw.repeat" (click)="changePassword()">
+              Change password
+            </button>
+            <p class="subtle">Changing it signs you out everywhere else.</p>
+          </div>
+        </div>
+      }
+
       <div class="panel">
         <div class="panel__head"><span class="panel__title">Accessibility</span></div>
         <div class="panel__body">
@@ -123,6 +140,15 @@ export class Settings {
     effect(() => {
       document.documentElement.dataset['density'] = this.density();
     });
+  }
+
+  protected pw = { current: '', next: '', repeat: '' };
+
+  protected async changePassword(): Promise<void> {
+    if (await this.auth.changePassword(this.pw.current, this.pw.next)) {
+      this.pw = { current: '', next: '', repeat: '' };
+      this.toast.success('Password changed', 'Other sessions have been signed out.');
+    }
   }
 
   protected setDensity(d: 'compact' | 'comfortable'): void {

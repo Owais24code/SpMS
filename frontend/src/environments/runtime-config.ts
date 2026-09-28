@@ -21,9 +21,11 @@
  *            properties and scopes. Refused by the API outside Development.
  *   entra    Microsoft Entra ID through MSAL (authorization code + PKCE). The
  *            access token goes to the API as a bearer token.
+ *   local    SpMS's own email + password accounts (the API's Auth:Local):
+ *            no Entra needed. The API issues its own bearer token.
  *   offline  No API at all (useRealApi false): the role presets stand in.
  */
-export type AuthMode = 'demo' | 'entra' | 'offline';
+export type AuthMode = 'demo' | 'entra' | 'local' | 'offline';
 
 export interface EntraConfig {
   readonly clientId: string;
@@ -96,7 +98,7 @@ const flag = (value: unknown, fallback: boolean): boolean =>
  * `//appointments` on every request.
  */
 const mode = (value: unknown, fallback: AuthMode): AuthMode =>
-  value === 'demo' || value === 'entra' || value === 'offline' ? value : fallback;
+  value === 'demo' || value === 'entra' || value === 'local' || value === 'offline' ? value : fallback;
 
 const words = (value: unknown): readonly string[] | null =>
   Array.isArray(value) && value.every((v) => typeof v === 'string' && v.trim().length > 0)

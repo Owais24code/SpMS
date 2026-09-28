@@ -218,6 +218,10 @@ CREATE TABLE core.principal_login (
     mfa_required                   boolean NOT NULL DEFAULT true,
     credential_rotated_at          timestamptz,
     last_authenticated_at          timestamptz,
+    password_hash                  text,
+    must_change_password           boolean NOT NULL DEFAULT false,
+    failed_attempts                integer NOT NULL DEFAULT 0,
+    locked_until                   timestamptz,
     status                         text NOT NULL DEFAULT 'Active',
     version                        integer NOT NULL DEFAULT 1,
     created_at                     timestamptz NOT NULL DEFAULT now(),
@@ -226,14 +230,19 @@ CREATE TABLE core.principal_login (
     updated_by                     uuid,
     correlation_id                 text,
     CONSTRAINT principal_login_pkey PRIMARY KEY (principal_login_id),
-    CONSTRAINT principal_login_login_type_ck CHECK (login_type IN ('EntraUser', 'EntraApplication')),
+    CONSTRAINT principal_login_login_type_ck CHECK (login_type IN ('EntraUser', 'EntraApplication', 'Local')),
+    CONSTRAINT principal_login_failed_attempts_ck CHECK (failed_attempts >= 0),
     CONSTRAINT principal_login_version_ck CHECK (version >= 1),
     CONSTRAINT principal_login_tenant_identity_uq UNIQUE (tenant_id, principal_login_id),
     CONSTRAINT principal_login_status_known CHECK (status IN ('Active', 'Disabled', 'Locked')),
+    CONSTRAINT principal_login_local_has_password CHECK ((login_type = 'Local') = (password_hash IS NOT NULL)),
     CONSTRAINT principal_login_subject_uq UNIQUE (idp_issuer, idp_subject)
 );
-COMMENT ON TABLE core.principal_login IS 'An external identity that signs in as a principal: Entra user (oid) or client-credentials app. [§24 OIDC/SSO, MFA, service accounts; §Security and audit (no password rows)]';
-COMMENT ON COLUMN core.principal_login.idp_subject IS 'Entra object id (oid) or application object id';
+COMMENT ON TABLE core.principal_login IS 'An identity that signs in as a principal: Entra user (oid), client-credentials app, or a local email + password account. [§24 OIDC/SSO, MFA, service accounts; §Security and audit; local email + password sign-in (no Entra)]';
+COMMENT ON COLUMN core.principal_login.idp_subject IS 'Entra object id (oid), application object id, or the lower-cased email of a local account';
+COMMENT ON COLUMN core.principal_login.password_hash IS 'Local accounts only: PBKDF2-SHA256, salted, iteration count in the value; never the password';
+COMMENT ON COLUMN core.principal_login.must_change_password IS 'a temporary password set by an administrator must be replaced at next sign-in';
+COMMENT ON COLUMN core.principal_login.locked_until IS 'set after repeated wrong passwords; sign-in refused until then';
 
 CREATE TABLE core.device_registration (
     device_registration_id         uuid NOT NULL DEFAULT core.uuid_v7(),

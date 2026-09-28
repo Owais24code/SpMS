@@ -2,7 +2,8 @@ namespace Spms.SharedKernel;
 
 /// <summary>
 /// Fine-grained authorization: may this principal do this to this object?
-/// Answered by OpenFGA (authorization/model.fga).
+/// Answered by authorization/model.fga: by an OpenFGA server, or in-process
+/// from the SpMS tables (Authorization:Mode = Local).
 ///
 /// Fails CLOSED: when the decider cannot be reached it throws
 /// <see cref="AccessUnavailableException"/> and the API answers 503 — never a
@@ -22,7 +23,9 @@ public sealed record AccessCheck(
     IReadOnlyList<FgaTuple>? Contextual = null,
     IReadOnlyDictionary<string, object>? Context = null,
     /// <summary>HIGHER_CONSISTENCY: for revocation-sensitive checks.</summary>
-    bool Strong = false);
+    bool Strong = false,
+    /// <summary>The caller's tenant: the in-process decider reads that tenant's relationships (OpenFGA ignores it).</summary>
+    Guid? Tenant = null);
 
 public sealed record FgaTuple(string User, string Relation, string Object);
 

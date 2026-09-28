@@ -279,6 +279,11 @@ jobs:
             echo "::error::authorization/model.json is stale. Run: fga model transform --file authorization/model.fga > authorization/model.json"
             exit 1
           }
+      # The in-process decider (Authorization:Mode = Local) runs these same assertions in the backend suite.
+      - name: model.fga.tests.json matches model.fga.yaml
+        run: |
+          python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
+          python3 authorization/tests-to-json.py --check
 
   e2e:
     name: E2E - web against the real API

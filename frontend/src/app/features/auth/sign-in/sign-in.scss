@@ -108,3 +108,9 @@
   background: var(--status-danger-bg);
   font-size: 0.925rem;
 }
+
+.form { display: grid; gap: var(--space-3); margin-bottom: var(--space-3); }
+.form label { display: grid; gap: var(--space-1); font-size: var(--text-sm); font-weight: var(--weight-medium, 500); }
+.form input { padding: var(--space-2) var(--space-3); border: 1px solid var(--border-strong, #bbb); border-radius: var(--radius-sm, 6px); font: inherit; background: var(--surface, #fff); color: inherit; }
+.card__notice { padding: var(--space-3); border-radius: var(--radius-sm, 6px); background: var(--success-surface, #e8f5ee); color: var(--success-text, #135c35); margin-bottom: var(--space-3); }
+.linklike { background: none; border: 0; padding: 0; text-decoration: underline; cursor: pointer; color: inherit; font: inherit; }

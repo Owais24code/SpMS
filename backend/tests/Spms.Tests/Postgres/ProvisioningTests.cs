@@ -45,6 +45,29 @@ public class ProvisioningTests(PostgresFixture fixture) : IClassFixture<Postgres
     }
 
     [RequiresPostgres]
+    public async Task A_local_admin_gets_an_email_and_password_sign_in_that_must_be_changed()
+    {
+        var code = $"prov-{Guid.NewGuid():N}"[..20];
+        var email = $"Admin-{Guid.NewGuid():N}@Example.test";
+        var spec = new ProvisionOptions
+        {
+            Tenant = { Code = code, Name = "Local spa group" },
+            Properties = [new() { Code = "main", Name = "Main spa", Timezone = "Asia/Kolkata" }],
+            Admins = [new() { Name = "Local admin", Email = email, Password = "First-password-1" }],
+        };
+        Assert.Equal(3, (await Provisioning.RunAsync(fixture.ConnectionString, "spms_owner", spec, Issuer, NullLogger.Instance)).Count);
+
+        var id = await Resolver().ResolveAsync(LocalSessionIssuer.Issuer, Passwords.Subject(email));
+        Assert.NotNull(id);
+        Assert.Contains("platform_admin", id.RoleCodes);
+        var hash = await fixture.ScalarAsync<string>(
+            $"SELECT password_hash || '|' || must_change_password FROM core.principal_login WHERE idp_subject = '{Passwords.Subject(email)}'");
+        Assert.True(Passwords.Verify("First-password-1", hash.Split('|')[0]));
+        Assert.Equal("True", hash.Split('|')[1], ignoreCase: true);
+        Assert.Empty(await Provisioning.RunAsync(fixture.ConnectionString, "spms_owner", spec, Issuer, NullLogger.Instance));
+    }
+
+    [RequiresPostgres]
     public async Task An_incomplete_specification_is_refused_before_anything_is_written()
     {
         var spec = Spec("prov-bad", "not-a-guid");

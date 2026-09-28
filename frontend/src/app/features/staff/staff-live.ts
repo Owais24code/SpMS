@@ -5,9 +5,11 @@ import { PageHeader } from '../../shared/components/page-header/page-header';
 import { ReferenceApi } from '../../core/api/reference-api';
 import { ToastService } from '../../core/services/toast.service';
 import { AuthService } from '../../core/services/auth.service';
+import { environment } from '../../../environments/environment';
+import { SCOPES } from '../../core/models/contract';
 import { ROLE_CODES } from '../../core/models/reference';
 import type {
-  CredentialDto, HrDto, QualificationDto, RoleAssignmentDto, RosterEntryDto, ServiceDto, StaffDto,
+  CredentialDto, HrDto, QualificationDto, RoleAssignmentDto, RosterEntryDto, ServiceDto, SignInDto, StaffDto,
 } from '../../core/models/reference';
 import type { ApiProblem } from '../../core/models/api-problem';
 
@@ -37,6 +39,34 @@ type Tab = 'profile' | 'hr' | 'roles' | 'qualifications' | 'credentials';
         <label class="inline"><input type="checkbox" [(ngModel)]="newBookable" name="newBookable" /> Bookable</label>
         <button type="button" class="btn btn--primary" [disabled]="!newName.trim()" (click)="create()">Create</button>
       </div></div>
+    }
+
+    @if (pendingSignUps().length > 0) {
+      <section class="panel" aria-labelledby="signups-h" data-testid="sign-ups">
+        <div class="panel__head"><span class="panel__title" id="signups-h">Sign-ups waiting for approval</span>
+          <span class="panel__hint">Approving lets them sign in; give them a role on the Roles tab.</span></div>
+        <ul class="list">
+          @for (p of pendingSignUps(); track p.staffId) {
+            <li class="list__row">
+              <span>{{ p.preferredName }} · <span class="subtle">{{ p.email }}</span></span>
+              <span class="row">
+                <button type="button" class="btn btn--primary" (click)="decideSignUp(p, true)">Approve</button>
+                <button type="button" class="btn btn--ghost" (click)="decideSignUp(p, false)">Reject</button>
+              </span>
+            </li>
+          }
+        </ul>
+      </section>
+    }
+
+    @if (issued(); as t) {
+      <div class="panel" role="status" data-testid="temporary-password">
+        <div class="panel__body stack">
+          <p><strong>Temporary password for {{ t.email }}:</strong> <code class="numeric">{{ t.temporaryPassword }}</code></p>
+          <p class="subtle">Give it to them in person or by phone. It is shown only now; they must choose their own password at first sign-in.</p>
+          <button type="button" class="btn btn--ghost" (click)="issued.set(null)">Done</button>
+        </div>
+      </div>
     }
 
     <div class="grid grid--split">
@@ -74,7 +104,17 @@ type Tab = 'profile' | 'hr' | 'roles' | 'qualifications' | 'credentials';
                 </label>
                 <label class="inline"><input type="checkbox" [(ngModel)]="edit.bookable" name="bk" /> Bookable on the board</label>
                 <button type="button" class="btn btn--primary" (click)="saveProfile(s)">Save profile</button>
-                @if (!s.hasSignIn) {
+                @if (!s.hasSignIn && isLocal) {
+                  <fieldset class="stack" data-testid="sign-in-link">
+                    <legend>Sign-in</legend>
+                    <p class="subtle">Give {{ s.preferredName }} an email and password sign-in. Leave the password empty to generate a temporary one; they change it at first sign-in.</p>
+                    <div class="form-grid">
+                      <label>Work email <input id="local-email" [(ngModel)]="localSignIn.email" name="lem" type="email" /></label>
+                      <label>Temporary password (optional) <input id="local-password" [(ngModel)]="localSignIn.password" name="lpw" type="text" autocomplete="off" /></label>
+                    </div>
+                    <button type="button" class="btn btn--secondary" [disabled]="!localSignIn.email.trim()" (click)="giveLocalSignIn(s)">Give sign-in</button>
+                  </fieldset>
+                } @else if (!s.hasSignIn) {
                   <fieldset class="stack" data-testid="sign-in-link">
                     <legend>Sign-in</legend>
                     <p class="subtle">Link {{ s.preferredName }} to their Microsoft Entra account. Their object id is on the user's page in Entra ID (Users → the person → Object ID).</p>
@@ -83,6 +123,18 @@ type Tab = 'profile' | 'hr' | 'roles' | 'qualifications' | 'credentials';
                       <label>Work email <input id="signin-email" [(ngModel)]="signIn.email" name="em" type="email" /></label>
                     </div>
                     <button type="button" class="btn btn--secondary" [disabled]="!signIn.objectId.trim()" (click)="giveSignIn(s)">Give sign-in</button>
+                  </fieldset>
+                } @else if (signInOf(s); as si) {
+                  <fieldset class="stack" data-testid="sign-in-status">
+                    <legend>Sign-in</legend>
+                    <p>{{ si.loginType === 'Local' ? 'Email and password' : 'Microsoft Entra' }} · {{ si.email ?? '—' }}
+                      @if (si.pendingApproval) { <span class="badge badge--warn">Waiting for approval</span> }
+                      @if (si.locked) { <span class="badge badge--warn">Locked</span> }
+                      @if (si.mustChangePassword) { <span class="badge">Temporary password</span> }
+                    </p>
+                    @if (si.loginType === 'Local') {
+                      <button type="button" class="btn btn--ghost" (click)="resetPassword(s)">Reset password</button>
+                    }
                   </fieldset>
                 }
               }
@@ -258,10 +310,19 @@ export class StaffLive implements OnInit {
   protected cred = { credentialKind: 'License', licenseTypeCode: '', number: '', expiresAt: '' };
   protected shift = { staffId: '', entryType: 'Shift', starts: '', ends: '' };
   protected signIn = { objectId: '', email: '' };
+  protected localSignIn = { email: '', password: '' };
+  protected readonly isLocal = environment.authMode === 'local';
+  protected readonly signIns = signal<readonly SignInDto[]>([]);
+  protected readonly pendingSignUps = computed(() => this.signIns().filter((x) => x.pendingApproval));
+  protected readonly issued = signal<{ email: string; temporaryPassword: string } | null>(null);
 
   ngOnInit(): void { void this.load(); }
 
   async load(): Promise<void> {
+    // Sign-ins are an administrator's view; anyone else simply does not see them.
+    if (this.auth.has(SCOPES.admin)) {
+      try { this.signIns.set(await this.api.signIns()); } catch { this.signIns.set([]); }
+    }
     try {
       const [team, services] = await Promise.all([this.api.staff(), this.api.services('Active')]);
       this.team.set(team);
@@ -336,6 +397,47 @@ export class StaffLive implements OnInit {
       this.toast.success('Profile saved', saved.preferredName);
       await this.load();
       this.select(this.team().find((x) => x.staffId === s.staffId) ?? saved);
+    });
+  }
+
+  protected signInOf(s: StaffDto): SignInDto | null {
+    return this.signIns().find((x) => x.staffId === s.staffId) ?? null;
+  }
+
+  protected async giveLocalSignIn(s: StaffDto): Promise<void> {
+    await this.run(async () => {
+      const r = await this.api.giveLocalSignIn(s.staffId, s.rowVersion,
+        { email: this.localSignIn.email.trim(), ...(this.localSignIn.password ? { password: this.localSignIn.password } : {}) });
+      this.issued.set({ email: r.email, temporaryPassword: r.temporaryPassword });
+      this.toast.success('Sign-in given', `${s.preferredName} can sign in with ${r.email}. Propose their roles next.`);
+      this.localSignIn = { email: '', password: '' };
+      await this.load();
+      const fresh = this.team().find((x) => x.staffId === s.staffId);
+      if (fresh) this.select(fresh);
+    });
+  }
+
+  protected async resetPassword(s: StaffDto): Promise<void> {
+    await this.run(async () => {
+      const r = await this.api.resetPassword(s.staffId);
+      this.issued.set({ email: r.email, temporaryPassword: r.temporaryPassword });
+      this.toast.success('Password reset', 'Their other sessions have been signed out.');
+      await this.load();
+    });
+  }
+
+  protected async decideSignUp(p: SignInDto, approve: boolean): Promise<void> {
+    await this.run(async () => {
+      const staff = this.team().find((x) => x.staffId === p.staffId);
+      if (!staff) return;
+      await (approve ? this.api.approveSignUp(p.staffId, staff.rowVersion) : this.api.rejectSignUp(p.staffId, staff.rowVersion));
+      this.toast.success(approve ? 'Sign-up approved' : 'Sign-up rejected',
+        approve ? `${p.preferredName} can sign in once they have a role. Propose one on the Roles tab.` : `${p.preferredName} will not be able to sign in.`);
+      await this.load();
+      if (approve) {
+        const fresh = this.team().find((x) => x.staffId === p.staffId);
+        if (fresh) this.select(fresh);
+      }
     });
   }
 

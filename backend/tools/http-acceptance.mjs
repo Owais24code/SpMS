@@ -1491,6 +1491,101 @@ await test('a role is proposed by one administrator and approved by another, the
   eq('Revoked', revoked.json.status);
 });
 
+/* ---------------- local email + password accounts (Auth:Local:Enabled) ---------------- */
+
+const LOCAL = (await call('POST', '/auth/login', { body: { email: 'probe@nowhere.test', password: 'x' } })).status !== 404;
+const anon = (method, path, body) => call(method, path, { body, login: null, scopes: '', headers: {} });
+const staffETag = async (staffId) => (await call('GET', '/staff')).json.find((s) => s.staffId === staffId)?.eTag;
+const localTest = LOCAL ? test : async (name) => console.log(`  skip  ${name} (Auth:Local is off)`);
+// A role proposed by one administrator (morgan) and approved by another (ada), tenant-wide.
+async function grantRole(staffId, roleCode) {
+  const proposed = await call('POST', `/staff/${staffId}/roles`, { body: { roleCode, tenantWide: true } });
+  eq(201, proposed.status, proposed.text);
+  const approved = await call('POST', `/role-assignments/${proposed.json.assignmentId}/approve`, { login: 'ada', headers: { 'If-Match': proposed.json.eTag } });
+  eq(200, approved.status, approved.text);
+}
+
+await localTest('a sign-up waits for approval; the wrong password and an unknown email get the same answer', async () => {
+  const email = `signup-${uniq()}@aarfid.dev`;
+  const password = `Sweep-${uniq()}-pass`;
+  eq(422, (await anon('POST', '/auth/register', { email, name: 'Sign Up', password: 'short' })).status, 'a weak password was accepted');
+  const reg = await anon('POST', '/auth/register', { email, name: 'Sign Up', password });
+  eq(202, reg.status, reg.text);
+  eq(202, (await anon('POST', '/auth/register', { email, name: 'Again', password })).status, 'a second sign-up revealed the first');
+  const pending = await anon('POST', '/auth/login', { email, password });
+  eq(403, pending.status, pending.text);
+  ok(pending.text.includes('PENDING_APPROVAL'), pending.text);
+  const wrong = await anon('POST', '/auth/login', { email, password: 'not-the-password' });
+  const unknown = await anon('POST', '/auth/login', { email: `nobody-${uniq()}@aarfid.dev`, password });
+  eq(401, wrong.status);
+  eq(401, unknown.status);
+  eq(wrong.json.detail, unknown.json.detail, 'a wrong password is told apart from an unknown email');
+
+  const listed = (await call('GET', '/staff/sign-ins')).json.find((x) => x.email === email);
+  ok(listed?.pendingApproval, 'the sign-up is not listed as pending');
+  if (FGA) eq(403, (await call('POST', `/staff/${listed.staffId}/approve-sign-up`, { login: 'dana', headers: { 'If-Match': await staffETag(listed.staffId) } })).status,
+    'the desk approved a sign-up');
+  const approved = await call('POST', `/staff/${listed.staffId}/approve-sign-up`, { headers: { 'If-Match': await staffETag(listed.staffId) } });
+  eq(200, approved.status, approved.text);
+  eq('Active', approved.json.employmentStatus);
+
+  const noRole = await anon('POST', '/auth/login', { email, password });
+  eq(403, noRole.status, noRole.text);
+  ok(noRole.text.includes('NO_ROLES'), noRole.text);
+
+  await grantRole(listed.staffId, 'front_desk');
+  const signedIn = await anon('POST', '/auth/login', { email: email.toUpperCase(), password });
+  eq(200, signedIn.status, signedIn.text);
+  eq(false, signedIn.json.mustChangePassword);
+  const me = await call('GET', '/me', { bearer: signedIn.json.token });
+  eq(200, me.status, me.text);
+  ok(me.json.roles.includes('front_desk'), me.text);
+});
+
+await localTest('an administrator gives a local sign-in; the temporary password only reaches the change-password screen; changing it ends old sessions', async () => {
+  const email = `local-${uniq()}@aarfid.dev`;
+  const created = await call('POST', '/staff', { body: { preferredName: `Local ${uniq()}`, bookable: false } });
+  eq(201, created.status, created.text);
+  const given = await call('POST', `/staff/${created.json.staffId}/local-sign-in`, { headers: { 'If-Match': created.json.eTag }, body: { email } });
+  eq(200, given.status, given.text);
+  ok(given.json.temporaryPassword?.length >= 10, 'no temporary password came back');
+  eq(409, (await call('POST', `/staff/${created.json.staffId}/local-sign-in`, { headers: { 'If-Match': given.json.eTag }, body: { email: `x-${email}` } })).status,
+    'a second sign-in');
+  await grantRole(created.json.staffId, 'scheduler');
+
+  const first = await anon('POST', '/auth/login', { email, password: given.json.temporaryPassword });
+  eq(200, first.status, first.text);
+  eq(true, first.json.mustChangePassword);
+  eq(401, (await call('GET', '/staff', { bearer: first.json.token })).status, 'a temporary password reached the app');
+  eq(200, (await call('GET', '/me', { bearer: first.json.token })).status);
+
+  const bad = await call('POST', '/auth/change-password', { bearer: first.json.token, body: { currentPassword: 'wrong-password-1', newPassword: 'A-new-password-1' } });
+  eq(422, bad.status, bad.text);
+  const changed = await call('POST', '/auth/change-password', { bearer: first.json.token,
+    body: { currentPassword: given.json.temporaryPassword, newPassword: `Changed-${uniq()}-pw` } });
+  eq(200, changed.status, changed.text);
+  eq(401, (await call('GET', '/me', { bearer: first.json.token })).status, 'the session from before the change still works');
+  eq(200, (await call('GET', '/me', { bearer: changed.json.token })).status);
+});
+
+await localTest('repeated wrong passwords lock the login; an administrator reset unlocks it and ends the old sessions', async () => {
+  const email = `lock-${uniq()}@aarfid.dev`;
+  const created = await call('POST', '/staff', { body: { preferredName: `Lock ${uniq()}`, bookable: false } });
+  const password = `Initial-${uniq()}-pw`;
+  const given = await call('POST', `/staff/${created.json.staffId}/local-sign-in`, { headers: { 'If-Match': created.json.eTag }, body: { email, password } });
+  eq(200, given.status, given.text);
+  for (let i = 0; i < 5; i++) await anon('POST', '/auth/login', { email, password: `wrong-${i}-password` });
+  const locked = await anon('POST', '/auth/login', { email, password });
+  eq(401, locked.status);
+  ok(locked.text.includes('ACCOUNT_LOCKED'), locked.text);
+  const reset = await call('POST', `/staff/${created.json.staffId}/reset-password`);
+  eq(200, reset.status, reset.text);
+  const again = await anon('POST', '/auth/login', { email, password: reset.json.temporaryPassword });
+  eq(200, again.status, again.text);
+  eq(true, again.json.mustChangePassword);
+  eq(401, (await anon('POST', '/auth/login', { email, password })).status, 'the old password still works after a reset');
+});
+
 await test('a sign-in links a staff member to one Entra account, once; then roles can be approved and they can sign in', async () => {
   const oid = crypto.randomUUID();
   const created = await call('POST', '/staff', { body: { preferredName: `Linked ${uniq()}`, bookable: false } });

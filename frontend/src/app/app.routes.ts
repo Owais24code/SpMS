@@ -89,6 +89,11 @@ export const routes: Routes = [
     loadComponent: () => import('./features/auth/sign-in/sign-in').then((m) => m.SignIn),
   },
   {
+    path: 'register',
+    title: 'Create an account — AARFID SpMS',
+    loadComponent: () => import('./features/auth/register/register').then((m) => m.Register),
+  },
+  {
     path: 'app',
     canActivate: [authGuard],
     loadComponent: () => import('./layouts/app-layout/app-layout').then((m) => m.AppLayout),

@@ -65,7 +65,7 @@ public sealed partial class PrincipalRow : ITenantOwned, IVersioned, ICreatedBy,
     public string? CorrelationId { get; set; }
 }
 
-/// <summary>core.principal_login. An external identity that signs in as a principal: Entra user (oid) or client-credentials app.</summary>
+/// <summary>core.principal_login. An identity that signs in as a principal: Entra user (oid), client-credentials app, or a local email + password account.</summary>
 public sealed partial class PrincipalLoginRow : ITenantOwned, IVersioned, ICreatedBy, IUpdatedBy, ICorrelated
 {
     public Guid PrincipalLoginId { get; set; }
@@ -78,6 +78,10 @@ public sealed partial class PrincipalLoginRow : ITenantOwned, IVersioned, ICreat
     public bool MfaRequired { get; set; } = true;
     public DateTimeOffset? CredentialRotatedAt { get; set; }
     public DateTimeOffset? LastAuthenticatedAt { get; set; }
+    public string? PasswordHash { get; set; }
+    public bool MustChangePassword { get; set; } = false;
+    public int FailedAttempts { get; set; } = 0;
+    public DateTimeOffset? LockedUntil { get; set; }
     public string Status { get; set; } = "Active";
     public int Version { get; set; } = 1;
     public DateTimeOffset CreatedAt { get; set; }

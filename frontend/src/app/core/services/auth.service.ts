@@ -28,7 +28,7 @@ export interface Principal {
   readonly properties: readonly PropertyRef[];
   readonly roleLabel: string;
   readonly scopes: readonly Scope[];
-  readonly source: 'demo' | 'entra' | 'offline';
+  readonly source: 'demo' | 'entra' | 'local' | 'offline';
 }
 
 /** Requests that must not be decorated with the signed-in operator's identity. */
@@ -115,11 +115,24 @@ interface MeDto {
 }
 
 interface Stored {
-  readonly source: 'demo' | 'entra' | 'offline';
+  readonly source: 'demo' | 'entra' | 'local' | 'offline';
   readonly login?: string;
   readonly role?: RoleKey;
   readonly propertyId?: string | null;
+  /** local: the API-issued session token and when it expires. */
+  readonly token?: string;
+  readonly expiresUtc?: string;
 }
+
+interface LocalSessionDto {
+  readonly token: string;
+  readonly expiresUtc: string;
+  readonly mustChangePassword: boolean;
+  readonly hasRoles?: boolean;
+}
+
+/** What a local sign-in attempt led to. */
+export type LocalSignInResult = 'signed-in' | 'change-password' | 'failed';
 
 const KEY = 'spms-session';
 const EMPTY = '00000000-0000-0000-0000-000000000000';
@@ -152,6 +165,9 @@ export class AuthService {
   readonly busy = this._busy.asReadonly();
   readonly error = this._error.asReadonly();
   readonly isSignedIn = computed(() => this._user() !== null);
+  /** local: a temporary password was accepted and must be replaced before anything else. */
+  readonly passwordChangeRequired = signal(false);
+  private pendingToken: string | null = null;
 
   /**
    * Runs before the first navigation (provideAppInitializer). Finishes an
@@ -171,6 +187,14 @@ export class AuthService {
         return returnUrl;
       }
       const s = this.stored;
+      if (s?.source === 'local') {
+        if (s.token && s.expiresUtc && Date.parse(s.expiresUtc) > Date.now() + 30_000) {
+          await this.loadMe('local', s.propertyId ?? null, undefined, s.token, s.expiresUtc);
+        } else {
+          this.signOut();
+        }
+        return null;
+      }
       if (s?.source === 'offline' && s.role && s.role in ROLE_PRESETS) {
         this._user.set(this.fromPreset(s.role));
       } else if (s?.source === 'demo' && s.login) {
@@ -203,6 +227,84 @@ export class AuthService {
     }
   }
 
+  /**
+   * local: email + password. A temporary password (set by an administrator)
+   * signs in only far enough to replace it: passwordChangeRequired turns on
+   * and the sign-in screen asks for a new one.
+   */
+  async signInWithPassword(email: string, password: string): Promise<LocalSignInResult> {
+    this._error.set(null);
+    this._busy.set(true);
+    try {
+      const s = await firstValueFrom(this.http.post<LocalSessionDto>(`${environment.apiBaseUrl}/auth/login`,
+        { email, password }, { context: new HttpContext().set(SKIP_AUTH, true) }));
+      if (s.mustChangePassword) {
+        this.pendingToken = s.token;
+        this.passwordChangeRequired.set(true);
+        return 'change-password';
+      }
+      await this.loadMe('local', null, undefined, s.token, s.expiresUtc);
+      return 'signed-in';
+    } catch (err) {
+      this._error.set(this.describe(err));
+      return 'failed';
+    } finally {
+      this._busy.set(false);
+    }
+  }
+
+  /** local: replaces the password (the temporary one after first sign-in, or the current one from Settings). */
+  async changePassword(currentPassword: string, newPassword: string): Promise<boolean> {
+    this._error.set(null);
+    const token = this.pendingToken ?? this.stored?.token;
+    if (!token) {
+      this._error.set('Sign in first.');
+      return false;
+    }
+    this._busy.set(true);
+    try {
+      const s = await firstValueFrom(this.http.post<LocalSessionDto>(`${environment.apiBaseUrl}/auth/change-password`,
+        { currentPassword, newPassword },
+        { headers: new HttpHeaders({ Authorization: `Bearer ${token}` }), context: new HttpContext().set(SKIP_AUTH, true) }));
+      this.pendingToken = null;
+      this.passwordChangeRequired.set(false);
+      if (s.hasRoles === false) {
+        this.signOut();
+        this._error.set('Password changed. Your account has no role yet: ask an administrator to give you one, then sign in.');
+        return false;
+      }
+      await this.loadMe('local', this._user()?.propertyId ?? null, undefined, s.token, s.expiresUtc);
+      return true;
+    } catch (err) {
+      this._error.set(this.describe(err));
+      return false;
+    } finally {
+      this._busy.set(false);
+    }
+  }
+
+  /** local: a sign-up waits for an administrator's approval; the answer is the same whether or not the email is known. */
+  async register(email: string, name: string, password: string): Promise<boolean> {
+    this._error.set(null);
+    this._busy.set(true);
+    try {
+      await firstValueFrom(this.http.post(`${environment.apiBaseUrl}/auth/register`,
+        { email, name, password }, { context: new HttpContext().set(SKIP_AUTH, true) }));
+      return true;
+    } catch (err) {
+      const e = err as { status?: number };
+      this._error.set(e?.status === 404 ? 'Sign-up is turned off here. Ask an administrator for an account.' : this.describe(err));
+      return false;
+    } finally {
+      this._busy.set(false);
+    }
+  }
+
+  cancelPasswordChange(): void {
+    this.pendingToken = null;
+    this.passwordChangeRequired.set(false);
+  }
+
   /** Entra: leaves the page for Microsoft sign-in and comes back through restore(). */
   async signInWithEntra(returnUrl: string): Promise<void> {
     this._error.set(null);
@@ -218,6 +320,8 @@ export class AuthService {
   signOut(): void {
     const wasEntra = this._user()?.source === 'entra';
     this._user.set(null);
+    this.pendingToken = null;
+    this.passwordChangeRequired.set(false);
     this.stored = null;
     try { localStorage.removeItem(KEY); } catch { /* ignore */ }
     if (wasEntra && this.entra) void this.entra.signOut();
@@ -234,7 +338,7 @@ export class AuthService {
     if (u.source === 'offline') return false;
     this._busy.set(true);
     try {
-      await this.loadMe(u.source, propertyId, this.stored?.login);
+      await this.loadMe(u.source, propertyId, this.stored?.login, this.stored?.token, this.stored?.expiresUtc);
       return true;
     } catch (err) {
       this._error.set(this.describe(err));
@@ -252,6 +356,8 @@ export class AuthService {
     switch (u.source) {
       case 'entra':
         return { Authorization: `Bearer ${await (await this.entraClient()).accessToken()}`, ...property };
+      case 'local':
+        return this.stored?.token ? { Authorization: `Bearer ${this.stored.token}`, ...property } : property;
       case 'demo':
         return { 'X-Spa-Login': this.stored?.login ?? '', ...property };
       default:
@@ -276,9 +382,11 @@ export class AuthService {
     return scopes.some((s) => this.has(s));
   }
 
-  private async loadMe(source: 'demo' | 'entra', propertyId: string | null, login?: string): Promise<void> {
+  private async loadMe(source: 'demo' | 'entra' | 'local', propertyId: string | null, login?: string,
+                       token?: string, expiresUtc?: string): Promise<void> {
     let headers = new HttpHeaders();
     if (source === 'demo') headers = headers.set('X-Spa-Login', login ?? '');
+    else if (source === 'local') headers = headers.set('Authorization', `Bearer ${token ?? ''}`);
     else headers = headers.set('Authorization', `Bearer ${await (await this.entraClient()).accessToken()}`);
     if (propertyId) headers = headers.set('X-Spa-Property', propertyId);
 
@@ -305,7 +413,7 @@ export class AuthService {
       source,
     };
     this._user.set(user);
-    this.write({ source, login, propertyId: user.propertyId });
+    this.write(source === 'local' ? { source, propertyId: user.propertyId, token, expiresUtc } : { source, login, propertyId: user.propertyId });
   }
 
   private fromPreset(role: RoleKey): Principal {

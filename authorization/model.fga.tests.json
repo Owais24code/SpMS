@@ -1,0 +1,808 @@
+{
+ "tests": [
+  {
+   "check": [
+    {
+     "assertions": {
+      "can_book": true,
+      "can_check_in": true,
+      "can_override_soft_conflict": false,
+      "can_preflight": false,
+      "can_refund": false,
+      "can_take_payment": true,
+      "can_view_board": true
+     },
+     "object": "property:a1",
+     "user": "user:desk"
+    },
+    {
+     "assertions": {
+      "can_book": false,
+      "can_preflight": true,
+      "can_reassign": true,
+      "can_view_board": true
+     },
+     "object": "property:a1",
+     "user": "user:sched"
+    },
+    {
+     "assertions": {
+      "can_approve_comp": true,
+      "can_override_soft_conflict": true,
+      "can_read_financial_reports": false,
+      "can_read_operational_reports": true
+     },
+     "object": "property:a1",
+     "user": "user:mgr"
+    },
+    {
+     "assertions": {
+      "can_book": false,
+      "can_view_board": false,
+      "staff": true
+     },
+     "object": "property:a1",
+     "user": "user:prov"
+    }
+   ],
+   "name": "board and booking by role"
+  },
+  {
+   "check": [
+    {
+     "assertions": {
+      "can_book": false,
+      "can_view_board": false
+     },
+     "object": "property:a2",
+     "user": "user:desk"
+    },
+    {
+     "assertions": {
+      "can_view_board": false
+     },
+     "object": "property:a1",
+     "user": "user:b_desk"
+    },
+    {
+     "assertions": {
+      "can_read_financial_reports": true,
+      "can_reconcile": true,
+      "can_refund": true
+     },
+     "object": "property:a2",
+     "user": "user:fin"
+    },
+    {
+     "assertions": {
+      "can_refund": false
+     },
+     "object": "property:b1",
+     "user": "user:fin"
+    }
+   ],
+   "name": "roles never cross properties or tenants"
+  },
+  {
+   "check": [
+    {
+     "assertions": {
+      "can_override_soft_conflict": false,
+      "can_read": true,
+      "can_read_intake_summary": true,
+      "can_reassign": false,
+      "can_transition": true,
+      "can_write_treatment_note": true
+     },
+     "object": "appointment:ap1",
+     "user": "user:prov"
+    },
+    {
+     "assertions": {
+      "can_read": false,
+      "can_read_intake_summary": false,
+      "can_transition": false
+     },
+     "object": "appointment:ap1",
+     "user": "user:prov2"
+    },
+    {
+     "assertions": {
+      "can_cancel": true,
+      "can_read": true,
+      "can_read_intake_status": true,
+      "can_read_intake_summary": false
+     },
+     "object": "appointment:ap1",
+     "user": "user:desk"
+    }
+   ],
+   "name": "provider sees assigned appointments only (provider appointments read:assigned)"
+  },
+  {
+   "check": [
+    {
+     "assertions": {
+      "can_read_full": true,
+      "can_update": true
+     },
+     "object": "intake_submission:in1",
+     "user": "user:g1"
+    },
+    {
+     "assertions": {
+      "can_acknowledge": true,
+      "can_read_full": false,
+      "can_read_summary": true
+     },
+     "object": "intake_submission:in1",
+     "user": "user:prov"
+    },
+    {
+     "assertions": {
+      "can_read_full": false,
+      "can_read_status": true,
+      "can_read_summary": false
+     },
+     "object": "intake_submission:in1",
+     "user": "user:desk"
+    },
+    {
+     "assertions": {
+      "can_read_full": false,
+      "can_read_summary": false
+     },
+     "object": "intake_submission:in1",
+     "user": "user:mgr"
+    },
+    {
+     "assertions": {
+      "can_read_full": false
+     },
+     "object": "intake_submission:in1",
+     "user": "user:hr"
+    },
+    {
+     "assertions": {
+      "can_read_status": false,
+      "can_read_summary": false
+     },
+     "object": "intake_submission:in1",
+     "user": "user:mkt"
+    }
+   ],
+   "name": "intake is minimum-necessary (SEC-008, DEC-004)"
+  },
+  {
+   "check": [
+    {
+     "assertions": {
+      "can_cancel": false,
+      "can_read": true
+     },
+     "context": {
+      "current_time": "2026-09-25T10:00:00Z",
+      "property_id": "a1"
+     },
+     "object": "appointment:ap1",
+     "user": "user:assistant"
+    },
+    {
+     "assertions": {
+      "can_book": true,
+      "can_complete_intake": false,
+      "can_pay": false,
+      "can_view_itinerary": true
+     },
+     "context": {
+      "current_time": "2026-09-25T10:00:00Z",
+      "property_id": "a1"
+     },
+     "object": "guest:g1",
+     "user": "user:assistant"
+    },
+    {
+     "assertions": {
+      "can_book": false
+     },
+     "context": {
+      "current_time": "2026-09-25T10:00:00Z",
+      "property_id": "a2"
+     },
+     "object": "guest:g1",
+     "user": "user:assistant"
+    },
+    {
+     "assertions": {
+      "can_book": false
+     },
+     "context": {
+      "current_time": "2027-01-01T00:00:00Z",
+      "property_id": "a1"
+     },
+     "object": "guest:g1",
+     "user": "user:assistant"
+    },
+    {
+     "assertions": {
+      "can_read_full": false,
+      "can_read_summary": false
+     },
+     "context": {
+      "current_time": "2026-09-25T10:00:00Z",
+      "property_id": "a1"
+     },
+     "object": "intake_submission:in1",
+     "user": "user:assistant"
+    }
+   ],
+   "name": "delegation is explicit, expiring and property-scoped (IDN-003)"
+  },
+  {
+   "check": [
+    {
+     "assertions": {
+      "can_amend": true,
+      "can_read": true
+     },
+     "object": "treatment_note:n1",
+     "user": "user:prov"
+    },
+    {
+     "assertions": {
+      "can_read": false
+     },
+     "context": {
+      "current_time": "2026-09-25T10:00:00Z"
+     },
+     "object": "treatment_note:n1",
+     "user": "user:prov2"
+    },
+    {
+     "assertions": {
+      "can_amend": false,
+      "can_read": true
+     },
+     "context": {
+      "current_time": "2026-09-25T10:00:00Z"
+     },
+     "object": "treatment_note:n1",
+     "user": "user:mgr"
+    },
+    {
+     "assertions": {
+      "can_read": false
+     },
+     "context": {
+      "current_time": "2026-10-02T00:00:00Z"
+     },
+     "object": "treatment_note:n1",
+     "user": "user:mgr"
+    },
+    {
+     "assertions": {
+      "can_read": false
+     },
+     "context": {
+      "current_time": "2026-09-25T10:00:00Z"
+     },
+     "object": "treatment_note:n1",
+     "user": "user:desk"
+    }
+   ],
+   "name": "treatment notes (read:authored_or_assigned, amend:authored, time-bound oversight)"
+  },
+  {
+   "check": [
+    {
+     "assertions": {
+      "can_read_credential_number": false,
+      "can_read_hr_profile": true,
+      "can_upload_documents": true,
+      "can_verify_credentials": false
+     },
+     "object": "staff_record:prov",
+     "user": "user:prov"
+    },
+    {
+     "assertions": {
+      "can_adjudicate_screening": true,
+      "can_read_credential_number": true
+     },
+     "object": "staff_record:prov",
+     "user": "user:hr"
+    },
+    {
+     "assertions": {
+      "can_read_credential_number": false,
+      "can_read_hr_profile": false
+     },
+     "object": "staff_record:prov",
+     "user": "user:mgr"
+    },
+    {
+     "assertions": {
+      "can_read_hr_profile": false
+     },
+     "object": "staff_record:prov",
+     "user": "user:admin"
+    },
+    {
+     "assertions": {
+      "can_read_staff_validity": true,
+      "can_suspend_assignment": true
+     },
+     "object": "property:a1",
+     "user": "user:mgr"
+    }
+   ],
+   "name": "HR records are excluded from broad roles (SEC-007)"
+  },
+  {
+   "check": [
+    {
+     "assertions": {
+      "can_approve_configuration": false,
+      "can_propose_configuration": true
+     },
+     "object": "tenant:t1",
+     "user": "user:admin"
+    },
+    {
+     "assertions": {
+      "can_approve_configuration": true,
+      "can_propose_configuration": false
+     },
+     "object": "tenant:t1",
+     "user": "user:approver"
+    },
+    {
+     "assertions": {
+      "can_propose_role": true,
+      "can_read_security_audit": true,
+      "can_revoke_session": true
+     },
+     "object": "tenant:t1",
+     "user": "user:secadm"
+    }
+   ],
+   "name": "segregation of duties on configuration (SEC-014)"
+  },
+  {
+   "check": [
+    {
+     "assertions": {
+      "can_read_operational_reports": false,
+      "can_read_scorecard": true,
+      "can_view_board": false
+     },
+     "object": "property:a1",
+     "user": "user:exec"
+    }
+   ],
+   "name": "executives see aggregates only"
+  },
+  {
+   "check": [
+    {
+     "assertions": {
+      "registered_device": true
+     },
+     "object": "property:a1",
+     "user": "device:tab1"
+    },
+    {
+     "assertions": {
+      "registered_device": false
+     },
+     "object": "property:a2",
+     "user": "device:tab1"
+    }
+   ],
+   "name": "registered devices"
+  },
+  {
+   "list_objects": [
+    {
+     "assertions": {
+      "can_read": [
+       "appointment:ap1"
+      ]
+     },
+     "type": "appointment",
+     "user": "user:prov"
+    },
+    {
+     "assertions": {
+      "can_read": []
+     },
+     "type": "appointment",
+     "user": "user:prov2"
+    }
+   ],
+   "name": "list objects - what a provider may open"
+  },
+  {
+   "check": [
+    {
+     "assertions": {
+      "can_approve_guest_merge": false,
+      "can_manage_delegation": true,
+      "can_propose_guest_merge": true
+     },
+     "object": "property:a1",
+     "user": "user:desk"
+    },
+    {
+     "assertions": {
+      "can_approve_guest_merge": true,
+      "can_manage_delegation": true,
+      "can_propose_guest_merge": true
+     },
+     "object": "property:a1",
+     "user": "user:mgr"
+    },
+    {
+     "assertions": {
+      "can_approve_guest_merge": false,
+      "can_manage_delegation": false,
+      "can_propose_guest_merge": false
+     },
+     "object": "property:a1",
+     "user": "user:prov"
+    },
+    {
+     "assertions": {
+      "can_handle_privacy_request": true
+     },
+     "object": "tenant:t1",
+     "user": "user:secadm"
+    },
+    {
+     "assertions": {
+      "can_handle_privacy_request": true
+     },
+     "object": "tenant:t1",
+     "user": "user:admin"
+    },
+    {
+     "assertions": {
+      "can_handle_privacy_request": false
+     },
+     "object": "tenant:t1",
+     "user": "user:fin"
+    }
+   ],
+   "name": "guest merge, delegation and privacy rights (IDN-001, IDN-003, IDN-006)"
+  },
+  {
+   "check": [
+    {
+     "assertions": {
+      "can_approve_count": true,
+      "can_approve_leave": true,
+      "can_manage_offering": true,
+      "can_manage_qualifications": true,
+      "can_manage_roster": true
+     },
+     "object": "property:a1",
+     "user": "user:mgr"
+    },
+    {
+     "assertions": {
+      "can_approve_leave": false,
+      "can_manage_offering": false,
+      "can_manage_roster": true
+     },
+     "object": "property:a1",
+     "user": "user:sched"
+    },
+    {
+     "assertions": {
+      "can_adjust_inventory": false,
+      "can_manage_offering": false,
+      "can_manage_roster": false
+     },
+     "object": "property:a1",
+     "user": "user:desk"
+    },
+    {
+     "assertions": {
+      "can_adjust_inventory": true,
+      "can_approve_count": true,
+      "can_manage_offering": false,
+      "can_read_inventory": true
+     },
+     "object": "property:a1",
+     "user": "user:inv"
+    },
+    {
+     "assertions": {
+      "can_adjust_inventory": false,
+      "can_approve_count": false,
+      "can_move_stock_state": true,
+      "can_read_inventory": true
+     },
+     "object": "property:a1",
+     "user": "user:house"
+    },
+    {
+     "assertions": {
+      "can_approve_configuration": false,
+      "can_approve_role": true,
+      "can_manage_catalog": true,
+      "can_propose_configuration": true,
+      "can_propose_role": true
+     },
+     "object": "tenant:t1",
+     "user": "user:admin"
+    },
+    {
+     "assertions": {
+      "can_approve_configuration": true,
+      "can_approve_role": false,
+      "can_propose_configuration": false
+     },
+     "object": "tenant:t1",
+     "user": "user:approver"
+    },
+    {
+     "assertions": {
+      "can_approve_role": false,
+      "can_manage_catalog": false,
+      "can_manage_staff": true
+     },
+     "object": "tenant:t1",
+     "user": "user:hr"
+    },
+    {
+     "assertions": {
+      "can_manage_catalog": false,
+      "can_manage_staff": false
+     },
+     "object": "tenant:t1",
+     "user": "user:fin"
+    }
+   ],
+   "name": "reference data, rostering, roles and counts (batch 6)"
+  },
+  {
+   "check": [
+    {
+     "assertions": {
+      "can_approve_templates": true,
+      "can_manage_devices": true,
+      "can_manage_templates": true,
+      "can_read_messages": true,
+      "can_send_messages": true
+     },
+     "object": "property:a1",
+     "user": "user:mgr"
+    },
+    {
+     "assertions": {
+      "can_approve_templates": false,
+      "can_manage_devices": false,
+      "can_manage_templates": true,
+      "can_read_messages": true,
+      "can_send_messages": false
+     },
+     "object": "property:a1",
+     "user": "user:mkt"
+    },
+    {
+     "assertions": {
+      "can_manage_devices": false,
+      "can_manage_templates": false,
+      "can_operate_devices_lockers": true,
+      "can_read_messages": true,
+      "can_send_messages": true
+     },
+     "object": "property:a1",
+     "user": "user:desk"
+    },
+    {
+     "assertions": {
+      "can_manage_devices": false,
+      "can_read_messages": false,
+      "can_send_messages": false
+     },
+     "object": "property:a1",
+     "user": "user:prov"
+    },
+    {
+     "assertions": {
+      "can_approve_templates": false,
+      "can_manage_templates": true,
+      "can_read_messages": true
+     },
+     "object": "property:a1",
+     "user": "user:admin"
+    }
+   ],
+   "name": "messaging and devices (batch 7)"
+  }
+ ],
+ "tuples": [
+  {
+   "object": "property:a1",
+   "relation": "tenant",
+   "user": "tenant:t1"
+  },
+  {
+   "object": "property:a2",
+   "relation": "tenant",
+   "user": "tenant:t1"
+  },
+  {
+   "object": "property:b1",
+   "relation": "tenant",
+   "user": "tenant:t2"
+  },
+  {
+   "object": "property:a1",
+   "relation": "front_desk",
+   "user": "user:desk"
+  },
+  {
+   "object": "property:a1",
+   "relation": "scheduler",
+   "user": "user:sched"
+  },
+  {
+   "object": "property:a1",
+   "relation": "spa_manager",
+   "user": "user:mgr"
+  },
+  {
+   "object": "property:a1",
+   "relation": "provider",
+   "user": "user:prov"
+  },
+  {
+   "object": "property:a1",
+   "relation": "provider",
+   "user": "user:prov2"
+  },
+  {
+   "object": "tenant:t1",
+   "relation": "finance",
+   "user": "user:fin"
+  },
+  {
+   "object": "tenant:t1",
+   "relation": "hr_compliance",
+   "user": "user:hr"
+  },
+  {
+   "object": "property:a1",
+   "relation": "housekeeping",
+   "user": "user:house"
+  },
+  {
+   "object": "property:a1",
+   "relation": "inventory_manager",
+   "user": "user:inv"
+  },
+  {
+   "object": "property:a1",
+   "relation": "marketing",
+   "user": "user:mkt"
+  },
+  {
+   "object": "tenant:t1",
+   "relation": "executive",
+   "user": "user:exec"
+  },
+  {
+   "object": "tenant:t1",
+   "relation": "security_admin",
+   "user": "user:secadm"
+  },
+  {
+   "object": "tenant:t1",
+   "relation": "platform_admin",
+   "user": "user:admin"
+  },
+  {
+   "object": "tenant:t1",
+   "relation": "configuration_approver",
+   "user": "user:approver"
+  },
+  {
+   "object": "property:b1",
+   "relation": "front_desk",
+   "user": "user:b_desk"
+  },
+  {
+   "object": "device:tab1",
+   "relation": "property",
+   "user": "property:a1"
+  },
+  {
+   "object": "property:a1",
+   "relation": "registered_device",
+   "user": "device:tab1"
+  },
+  {
+   "object": "guest:g1",
+   "relation": "tenant",
+   "user": "tenant:t1"
+  },
+  {
+   "object": "guest:g1",
+   "relation": "owner",
+   "user": "user:g1"
+  },
+  {
+   "condition": {
+    "context": {
+     "allowed_property_ids": [
+      "a1"
+     ],
+     "grant_expires_at": "2026-12-31T00:00:00Z"
+    },
+    "name": "active_delegation"
+   },
+   "object": "guest:g1",
+   "relation": "delegate_book",
+   "user": "user:assistant"
+  },
+  {
+   "object": "appointment:ap1",
+   "relation": "property",
+   "user": "property:a1"
+  },
+  {
+   "object": "appointment:ap1",
+   "relation": "guest",
+   "user": "guest:g1"
+  },
+  {
+   "object": "appointment:ap1",
+   "relation": "assigned_provider",
+   "user": "user:prov"
+  },
+  {
+   "object": "intake_submission:in1",
+   "relation": "guest",
+   "user": "guest:g1"
+  },
+  {
+   "object": "intake_submission:in1",
+   "relation": "appointment",
+   "user": "appointment:ap1"
+  },
+  {
+   "object": "treatment_note:n1",
+   "relation": "appointment",
+   "user": "appointment:ap1"
+  },
+  {
+   "object": "treatment_note:n1",
+   "relation": "author",
+   "user": "user:prov"
+  },
+  {
+   "condition": {
+    "context": {
+     "grant_expires_at": "2026-10-01T00:00:00Z"
+    },
+    "name": "active_grant"
+   },
+   "object": "treatment_note:n1",
+   "relation": "oversight",
+   "user": "user:mgr"
+  },
+  {
+   "object": "staff_record:prov",
+   "relation": "tenant",
+   "user": "tenant:t1"
+  },
+  {
+   "object": "staff_record:prov",
+   "relation": "subject",
+   "user": "user:prov"
+  }
+ ]
+}

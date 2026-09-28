@@ -1,10 +1,11 @@
 import { Component, ChangeDetectionStrategy, inject, signal } from '@angular/core';
-import { Router, ActivatedRoute } from '@angular/router';
+import { Router, ActivatedRoute, RouterLink } from '@angular/router';
 import { AuthService, ROLE_PRESETS, type RoleKey } from '../../../core/services/auth.service';
 
 @Component({
   selector: 'app-sign-in',
   standalone: true,
+  imports: [RouterLink],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="wrap">
@@ -29,6 +30,41 @@ import { AuthService, ROLE_PRESETS, type RoleKey } from '../../../core/services/
           <button type="button" class="btn btn--primary btn--lg card__go" [disabled]="auth.busy()" (click)="entra()">
             {{ auth.busy() ? 'Redirecting…' : 'Sign in with Microsoft' }}
           </button>
+        } @else if (auth.mode === 'local') {
+          @if (registered()) {
+            <p class="card__notice" role="status">Thanks. An administrator will approve your account; then you can sign in here.</p>
+          }
+          @if (auth.passwordChangeRequired()) {
+            <p class="card__sub">You signed in with a temporary password. Choose your own password to continue.</p>
+            <form class="form" (submit)="$event.preventDefault(); change()">
+              <label>New password
+                <input id="new-password" type="password" autocomplete="new-password" [value]="next()" (input)="next.set(value($event))" required />
+              </label>
+              <label>Repeat the new password
+                <input id="repeat-password" type="password" autocomplete="new-password" [value]="repeat()" (input)="repeat.set(value($event))" required />
+              </label>
+              <p class="card__note">At least 10 characters.</p>
+              <button type="submit" class="btn btn--primary btn--lg card__go" [disabled]="auth.busy() || !next() || next() !== repeat()">
+                {{ auth.busy() ? 'Saving…' : 'Set password and continue' }}
+              </button>
+              @if (next() && repeat() && next() !== repeat()) { <p class="card__error">The two passwords are different.</p> }
+            </form>
+            <button type="button" class="linklike" (click)="auth.cancelPasswordChange()">Back to sign-in</button>
+          } @else {
+            <p class="card__sub">Sign in with your work email and password.</p>
+            <form class="form" (submit)="$event.preventDefault(); password()">
+              <label>Email
+                <input id="email" type="email" autocomplete="username" [value]="email()" (input)="email.set(value($event))" required />
+              </label>
+              <label>Password
+                <input id="password" type="password" autocomplete="current-password" [value]="secret()" (input)="secret.set(value($event))" required />
+              </label>
+              <button type="submit" class="btn btn--primary btn--lg card__go" [disabled]="auth.busy() || !email() || !secret()">
+                {{ auth.busy() ? 'Signing in…' : 'Sign in' }}
+              </button>
+            </form>
+            <p class="card__note">New here? <a routerLink="/register">Create an account</a>. Forgot your password? Ask an administrator to reset it.</p>
+          }
         } @else {
           <p class="card__sub">
             @if (auth.mode === 'demo') {
@@ -90,6 +126,27 @@ export class SignIn {
   protected async go(): Promise<void> {
     // A kiosk runs one screen, full-screen; everyone else goes where they were going.
     if (await this.auth.signIn(this.picked())) void this.router.navigateByUrl(this.picked() === 'kiosk' ? '/kiosk' : this.returnUrl);
+  }
+
+  protected readonly email = signal('');
+  protected readonly secret = signal('');
+  protected readonly next = signal('');
+  protected readonly repeat = signal('');
+  protected readonly registered = signal(this.route.snapshot.queryParamMap.get('registered') === '1');
+
+  protected value(e: Event): string {
+    return (e.target as HTMLInputElement).value;
+  }
+
+  protected async password(): Promise<void> {
+    const result = await this.auth.signInWithPassword(this.email().trim(), this.secret());
+    if (result === 'signed-in') void this.router.navigateByUrl(this.returnUrl);
+  }
+
+  protected async change(): Promise<void> {
+    if (await this.auth.changePassword(this.secret(), this.next())) void this.router.navigateByUrl(this.returnUrl);
+    this.next.set('');
+    this.repeat.set('');
   }
 
   protected entra(): void {

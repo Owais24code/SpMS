@@ -33,8 +33,11 @@ public static class DatabaseMaintenance
         var created = new List<string>();
         var dropped = new List<string>();
         var warnings = new List<string>();
-        await using var conn = new NpgsqlConnection(ownerConnection);
+        await using var conn = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(ownerConnection) { Pooling = false }.ConnectionString);
         await conn.OpenAsync(ct);
+        // A deployed owner *login* (NOINHERIT) holds nothing itself: everything below is done as the owner role.
+        await using (var role = new NpgsqlCommand($"SET ROLE \"{ownerRole.Replace("\"", "\"\"")}\"", conn))
+            await role.ExecuteNonQueryAsync(ct);
 
         async Task<T?> Scalar<T>(string sql, NpgsqlTransaction? tx = null, params (string, object)[] ps)
         {

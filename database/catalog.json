@@ -508,8 +508,8 @@
    "kind": "aggregate",
    "scope": "tenant",
    "handoff": "new (replaces workforce.provider_identity and core.service_identity)",
-   "spec": "\u00a724 OIDC/SSO, MFA, service accounts; \u00a7Security and audit (no password rows)",
-   "doc": "An external identity that signs in as a principal: Entra user (oid) or client-credentials app.",
+   "spec": "\u00a724 OIDC/SSO, MFA, service accounts; \u00a7Security and audit; local email + password sign-in (no Entra)",
+   "doc": "An identity that signs in as a principal: Entra user (oid), client-credentials app, or a local email + password account.",
    "partitioned_by": null,
    "statuses": [
     "Active",
@@ -564,7 +564,7 @@
      "nullable": false,
      "fk": null,
      "restricted": false,
-     "doc": "Entra object id (oid) or application object id"
+     "doc": "Entra object id (oid), application object id, or the lower-cased email of a local account"
     },
     {
      "name": "username",
@@ -597,6 +597,38 @@
      "fk": null,
      "restricted": false,
      "doc": ""
+    },
+    {
+     "name": "password_hash",
+     "type": "text",
+     "nullable": true,
+     "fk": null,
+     "restricted": false,
+     "doc": "Local accounts only: PBKDF2-SHA256, salted, iteration count in the value; never the password"
+    },
+    {
+     "name": "must_change_password",
+     "type": "boolean",
+     "nullable": false,
+     "fk": null,
+     "restricted": false,
+     "doc": "a temporary password set by an administrator must be replaced at next sign-in"
+    },
+    {
+     "name": "failed_attempts",
+     "type": "integer",
+     "nullable": false,
+     "fk": null,
+     "restricted": false,
+     "doc": ""
+    },
+    {
+     "name": "locked_until",
+     "type": "timestamptz",
+     "nullable": true,
+     "fk": null,
+     "restricted": false,
+     "doc": "set after repeated wrong passwords; sign-in refused until then"
     },
     {
      "name": "status",

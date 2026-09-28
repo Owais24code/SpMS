@@ -6,11 +6,12 @@ namespace Spms.Host;
 
 public static class SchemaGate
 {
-    public static async Task VerifyAsync(IServiceProvider services, string ownerConnection, ILogger logger)
+    public static async Task VerifyAsync(IServiceProvider services, string ownerConnection, ILogger logger, string? migrationRole = null)
     {
         var problems = new List<string>();
 
-        await using (var migrations = DatabaseBootstrapper.CreateMigrationContext(ownerConnection, SpmsModules.Contributors(), null))
+        // As the migration role: a deployed owner *login* (spms_owner_login, NOINHERIT) reaches the migration history only through SET ROLE.
+        await using (var migrations = DatabaseBootstrapper.CreateMigrationContext(ownerConnection, SpmsModules.Contributors(), migrationRole))
         {
             var pending = (await Microsoft.EntityFrameworkCore.RelationalDatabaseFacadeExtensions
                 .GetPendingMigrationsAsync(migrations.Database)).ToList();

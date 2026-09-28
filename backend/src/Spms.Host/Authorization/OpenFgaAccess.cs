@@ -9,8 +9,12 @@ namespace Spms.Host.Authorization;
 
 public sealed class AuthorizationOptions
 {
-    /// <summary>OpenFga (required outside Development) or Permissive (Development without an OpenFGA server).</summary>
+    /// <summary>
+    /// OpenFga: an OpenFGA server decides (OpenFga:ApiUrl). Local: the same model, decided in the API process from the
+    /// SpMS tables, with no server to run. Permissive: Development only, allows every relationship.
+    /// </summary>
     public string Mode { get; set; } = "OpenFga";
+    public bool IsLocal => string.Equals(Mode, "Local", StringComparison.OrdinalIgnoreCase);
     public OpenFgaOptions OpenFga { get; set; } = new();
 }
 

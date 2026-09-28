@@ -19,6 +19,8 @@ namespace Spms.Host;
 ///   Entra      staff and service principals: an Entra ID JWT, then resolved
 ///              to an SpMS principal, tenant, roles and properties
 ///              (<see cref="PrincipalResolver"/>). Unprovisioned identities are refused.
+///   Local      SpMS's own email + password accounts (Auth:Local:Enabled): an
+///              SpMS-issued JWT, then resolved exactly like Entra.
 ///   Guest      a guest session minted by SpMS itself after a magic link is
 ///              redeemed (SEC-010/011): short-lived, purpose-limited, HMAC-signed.
 ///   Dev        Development only: X-Spa-Login names a seeded dev login (resolved
@@ -30,6 +32,7 @@ public static class SpmsAuth
     public const string PolicyScheme = "Spms";
     public const string JwtScheme = JwtBearerDefaults.AuthenticationScheme;
     public const string GuestScheme = "SpmsGuest";
+    public const string LocalScheme = "SpmsLocal";
     public const string DevScheme = "SpmsDevHeaders";
     public const string DevIssuer = "spms-dev";
 
@@ -55,6 +58,15 @@ public static class SpmsAuth
         services.AddMemoryCache();
         services.AddSingleton<PrincipalResolver>();
 
+        var local = options.Local.Enabled;
+        var localKey = local ? LocalSessionIssuer.KeyFrom(options.Local.SigningKey, env) : null;
+        services.AddSingleton(options.Local);
+        if (local)
+        {
+            services.AddSingleton(sp => new LocalSessionIssuer(localKey!, options.Local, sp.GetRequiredService<IClock>()));
+            services.AddSingleton<LocalAccounts>();
+        }
+
         var builder = services.AddAuthentication(o =>
         {
             o.DefaultScheme = PolicyScheme;
@@ -68,8 +80,12 @@ public static class SpmsAuth
                 if (devAllowed && (http.Request.Headers.ContainsKey("X-Spa-Scopes") || http.Request.Headers.ContainsKey("X-Spa-Login")))
                     return DevScheme;
                 var auth = http.Request.Headers.Authorization.ToString();
-                if (auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) && IsGuestToken(auth[7..].Trim()))
-                    return GuestScheme;
+                if (auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                {
+                    var issuer = IssuerOf(auth[7..].Trim());
+                    if (issuer == GuestSessionIssuer.Issuer) return GuestScheme;
+                    if (local && issuer == LocalSessionIssuer.Issuer) return LocalScheme;
+                }
                 return entra ? JwtScheme : GuestScheme;
             };
         });
@@ -119,6 +135,48 @@ public static class SpmsAuth
             });
         }
 
+        if (local)
+        {
+            builder.AddJwtBearer(LocalScheme, o =>
+            {
+                o.MapInboundClaims = false;
+                o.TokenValidationParameters = LocalSessionIssuer.Validation(localKey!);
+                o.Events = new JwtBearerEvents
+                {
+                    OnTokenValidated = async ctx =>
+                    {
+                        var principal = ctx.Principal!;
+                        var subject = principal.FindFirst("sub")?.Value ?? "";
+                        var services = ctx.HttpContext.RequestServices;
+                        var id = await services.GetRequiredService<PrincipalResolver>().ResolveAsync(LocalSessionIssuer.Issuer, subject, ctx.HttpContext.RequestAborted);
+                        if (id is null)
+                        {
+                            ctx.Fail("This account is not active in SpMS.");
+                            return;
+                        }
+                        // A password change or reset ends every session issued before it.
+                        var rotated = await services.GetRequiredService<LocalAccounts>().CredentialRotatedAtAsync(id.TenantId, subject, ctx.HttpContext.RequestAborted);
+                        if (rotated is { } r && (!long.TryParse(principal.FindFirst(LocalSessionIssuer.IssuedAtMsClaim)?.Value, out var issuedMs)
+                                                 || issuedMs < r.ToUnixTimeMilliseconds()))
+                        {
+                            ctx.Fail("The password changed after this session began.");
+                            return;
+                        }
+                        // A temporary password reaches only the screen that replaces it.
+                        var path = ctx.HttpContext.Request.Path;
+                        if (principal.HasClaim(LocalSessionIssuer.PasswordChangeClaim, "1")
+                            && !path.StartsWithSegments("/auth/change-password") && !path.StartsWithSegments("/me"))
+                        {
+                            ctx.Fail("Change the temporary password first.");
+                            return;
+                        }
+                        principal.AddIdentity(IdentityClaims.For(id, RequestedProperty(ctx.HttpContext), [], id.ActorType));
+                    },
+                    OnChallenge = Challenge,
+                };
+            });
+        }
+
         builder.AddJwtBearer(GuestScheme, o =>
         {
             o.MapInboundClaims = false;
@@ -139,16 +197,15 @@ public static class SpmsAuth
         return Guid.TryParse(raw, out var g) ? g : null;
     }
 
-    private static bool IsGuestToken(string token)
+    private static string? IssuerOf(string token)
     {
         try
         {
-            var jwt = new JwtSecurityTokenHandler().ReadJwtToken(token);
-            return jwt.Issuer == GuestSessionIssuer.Issuer;
+            return new JwtSecurityTokenHandler().ReadJwtToken(token).Issuer;
         }
         catch (ArgumentException)
         {
-            return false;
+            return null;
         }
     }
 
@@ -188,6 +245,9 @@ public sealed class AuthOptions
     public string? Authority { get; set; }
     public string? Audience { get; set; }
     public string[] ValidIssuers { get; set; } = [];
+
+    /// <summary>SpMS's own email + password accounts (no Entra needed).</summary>
+    public LocalAuthOptions Local { get; set; } = new();
 
     /// <summary>Base64 HMAC key (32+ bytes) for guest sessions; from Key Vault in deployed environments.</summary>
     public string? GuestSigningKey { get; set; }

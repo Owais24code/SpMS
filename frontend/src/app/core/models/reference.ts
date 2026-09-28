@@ -43,6 +43,16 @@ export interface StaffDto extends Versioned {
   readonly roles?: readonly RoleAssignmentDto[]; readonly qualifiedServiceIds?: readonly string[];
 }
 
+/** GET /staff/sign-ins: who signs in how; sign-ups waiting for approval. */
+export interface SignInDto {
+  readonly staffId: string; readonly preferredName: string; readonly principalId: string;
+  readonly loginType: 'Local' | 'EntraUser' | string; readonly email: string | null;
+  readonly pendingApproval: boolean; readonly active: boolean; readonly mustChangePassword: boolean; readonly locked: boolean;
+  readonly lastSignInUtc: string | null;
+}
+
+export interface TemporaryPasswordDto { readonly staffId: string; readonly email: string; readonly temporaryPassword: string; }
+
 export interface HrDto extends Versioned {
   readonly staffId: string; readonly employeeNumber: string; readonly firstName: string; readonly lastName: string; readonly workEmail: string | null;
   readonly personalEmail: string | null; readonly mobilePhone: string | null; readonly workerType: string; readonly jobTitle: string;

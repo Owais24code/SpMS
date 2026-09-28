@@ -102,6 +102,10 @@ public sealed class CoreModelContributor : IModelContributor
             e.Property(x => x.MfaRequired).HasColumnName("mfa_required").HasColumnType("boolean").IsRequired();
             e.Property(x => x.CredentialRotatedAt).HasColumnName("credential_rotated_at").HasColumnType("timestamp with time zone");
             e.Property(x => x.LastAuthenticatedAt).HasColumnName("last_authenticated_at").HasColumnType("timestamp with time zone");
+            e.Property(x => x.PasswordHash).HasColumnName("password_hash").HasColumnType("text");
+            e.Property(x => x.MustChangePassword).HasColumnName("must_change_password").HasColumnType("boolean").IsRequired();
+            e.Property(x => x.FailedAttempts).HasColumnName("failed_attempts").HasColumnType("integer").IsRequired();
+            e.Property(x => x.LockedUntil).HasColumnName("locked_until").HasColumnType("timestamp with time zone");
             e.Property(x => x.Status).HasColumnName("status").HasColumnType("text").IsRequired();
             e.Property(x => x.Version).HasColumnName("version").HasColumnType("integer").IsRequired().IsConcurrencyToken();
             e.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamp with time zone").IsRequired().HasDefaultValueSql("now()");

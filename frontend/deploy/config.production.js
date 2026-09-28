@@ -1,19 +1,18 @@
 /*
  * Production runtime configuration for the `spms` web app (Azure App Service).
  * build-for-azure.ps1 copies this over dist/web/browser/assets/config.js after
- * every build. Nothing here is secret: client ids and tenant ids are public.
+ * every build. Nothing here is secret.
  *
- * Fill in the four <...> values from docs/deploy-azure-portal.md (steps 2 and 4).
+ * authMode 'local': SpMS's own email + password sign-in (the API's Auth:Local).
+ * Replace <api-default-domain> with the spms-api web app's Default domain.
+ *
+ * Demo instead (no API, sample data):  window.__SPMS_CONFIG__ = { useRealApi: false, authMode: 'offline' };
+ * Entra later: authMode 'entra' plus  entra: { clientId, authority, apiScopes }  (see docs/deploy-azure-portal.md).
  */
 window.__SPMS_CONFIG__ = {
-  apiBaseUrl: 'https://<api-default-domain>',          // the spms-api web app, no trailing slash
+  apiBaseUrl: 'https://<api-default-domain>',   // no trailing slash
   useRealApi: true,
-  authMode: 'entra',
-  entra: {
-    clientId: '<spa-client-id>',                         // App registration "SpMS web" → Application (client) ID
-    authority: 'https://login.microsoftonline.com/<tenant-id>',
-    apiScopes: ['api://<api-client-id>/access_as_user'], // App registration "SpMS API" → Expose an API
-  },
+  authMode: 'local',
   // The codes given to Provision__Tenant__Code and Provision__Properties__0__Code.
   guestTenant: 'aarfid',
   guestProperty: 'main',

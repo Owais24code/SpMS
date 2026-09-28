@@ -202,10 +202,11 @@ files, all passing:
 | Layer | Question | Mechanism |
 |---|---|---|
 | Authentication, staff | Who is calling? | **Microsoft Entra ID**, JWT bearer (`scp`/`roles`). `(issuer, oid)` in `core.principal_login` resolves to a `core.principal` through `core.resolve_principal()` |
+| Authentication, staff (no Entra) | Who is calling? | **Local accounts** (`Auth:Local`): email + PBKDF2-hashed password in `core.principal_login` (type `Local`), an SpMS-issued JWT, then the same resolution as Entra |
 | Authentication, guests | Who is calling? | **Own magic links** (SEC-010/011): short-lived, single-use and purpose-limited. Only the SHA-256 is stored, and `guest.resolve_magic_link()` consumes it atomically |
 | Authentication, services | Who is calling? | Entra client credentials, linked through `core.principal_login` |
 | Coarse gate | May this client call this API family? | `spa.*` scopes in the token |
-| Fine authorization | May this principal do this to this object? | **OpenFGA** (`authorization/model.fga`) |
+| Fine authorization | May this principal do this to this object? | `authorization/model.fga`, decided by an **OpenFGA** server or **in-process** (`Authorization:Mode = Local`) |
 | Last line | Even if the app is wrong, what cannot leak? | PostgreSQL RLS |
 
 The OpenFGA user id is `user:<principal_id>`. Replacing the identity provider therefore
@@ -257,11 +258,33 @@ delegation, and passes 6/6.
 - Without `OpenFga:ApiUrl` in Development, relationship checks are permissive and say so in
   the log. Everywhere else a missing or unreachable OpenFGA is a 503.
 
+**Local accounts** (`Auth:Local:Enabled`), for deployments without Entra ID:
+
+- **Sign-in.** `POST /auth/login` with `{ email, password }` returns an SpMS session token (issuer `spms-local`). The token then resolves like an Entra token, so tenant, roles and properties come from SpMS.
+- **Wrong passwords.** After `MaxFailedAttempts` (5) the login locks for `LockoutMinutes` (15). An unknown email costs the same time as a wrong password and gets the same answer.
+- **Temporary passwords.** A temporary password, from an administrator or provisioning, reaches only `/me` and `/auth/change-password` until it is replaced.
+- **Changing a password.** Changing or resetting it ends every session issued before it.
+- **Registration.** `POST /auth/register` (when `AllowRegistration`) creates a disabled principal and a `Pending` staff record. It answers 202 whether or not the email is known.
+- **Administration.** Needs `can_propose_role`:
+  - `GET /staff/sign-ins`
+  - `POST /staff/{id}/local-sign-in` (returns a temporary password)
+  - `POST /staff/{id}/reset-password`
+  - `POST /staff/{id}/approve-sign-up` and `POST /staff/{id}/reject-sign-up`
+- **Roles.** A session is issued only to someone with an active role; otherwise the answer is 403 `NO_ROLES`.
+
+**In-process authorization** (`Authorization:Mode = Local`): the same `authorization/model.json`, evaluated in the API.
+
+- **Relationships.** The stored relationships come straight from the tables: roles, property → tenant, guest owner, delegations, devices. Each tenant's copy is kept for 10 seconds.
+- **Freshness.** A strong (revocation-sensitive) check reads fresh, and the outbox drops the copy on every change.
+- **Tests.** `LocalAuthorizationTests` runs every assertion of `model.fga.yaml` through it (`authorization/tests-to-json.py` exports them), and the HTTP sweep passes in both modes.
+- **Switching.** Switching to an OpenFGA server is a settings change: `Mode=OpenFga`, `OpenFga:ApiUrl`, then `--fga-sync`.
+
 **Front-end sign-in** (`assets/config.js` → `authMode`):
 
 | Mode | How | Where |
 |---|---|---|
 | `entra` | MSAL, authorization code + PKCE, full-page redirect; bearer token to the API | Production. Set `entra: { clientId, authority, apiScopes }` |
+| `local` | Email + password against `/auth/login`; Register page; forced change of a temporary password | Production without Entra |
 | `demo` | Pick a seeded dev login; the client sends `X-Spa-Login` | API in Development only |
 | `offline` | Role presets, no API (`useRealApi: false`) | Screen demos |
 
@@ -310,43 +333,26 @@ Glass effects are used on marketing surfaces only.
 
 ## Deployment
 
-**[docs/deploy-azure-portal.md](docs/deploy-azure-portal.md)** is the runbook. It uses the Azure
-portal, Visual Studio publish and VS Code only, with no CLI and no pipeline.
+**[docs/deploy-azure-portal.md](docs/deploy-azure-portal.md)** is the runbook. It uses only the Azure portal, Visual Studio publish and VS Code. The simple setup it describes is:
 
-| Piece | Hosting |
-|---|---|
-| Front end | Azure App Service (Windows). `public/web.config` gives SPA deep links and no-cache entry points; `frontend/deploy/build-for-azure.ps1` builds it with `deploy/config.production.js` |
-| API | Azure App Service (Windows, .NET 8), a single instance, because the live board fans out in-process |
-| Migrate, maintain, FGA sync | App Service WebJobs published with the API (`App_Data/jobs/triggered`) |
-| Database | PostgreSQL flexible server 16, with databases `spms` and `openfga` |
-| OpenFGA | Container Apps (`openfga/openfga`), with a preshared key and an IP allow-list |
+- one PostgreSQL 16 database
+- the API on Azure App Service (Windows, .NET 8, a single instance)
+- the front end on App Service
+- local email + password accounts (`Auth:Local`) and in-process authorization (`Authorization:Mode = Local`), so there is no Entra ID and no OpenFGA server to run
 
-**One image, four entry points:**
+**One build, four entry points:**
 
 - **The API**, with probes on `/health/live` and `/health/ready`.
 - **`--migrate`** runs, in order:
-  1. With the admin connection: creates the group roles and the two login roles.
-     `spms_owner_login` may SET ROLE `spms_owner`; `spms_app_login` may SET ROLE `spms_app` and
-     `spms_outbox`.
+  1. With the admin connection: creates the group roles and the two NOINHERIT login roles (`spms_owner_login` → `spms_owner`, `spms_app_login` → `spms_app` and `spms_outbox`).
   2. Migrates as the owner.
-  3. When a `Provision` section is configured, creates the first tenant, its properties and
-     its administrators. This is idempotent, and ids are derived from natural keys.
-- **`--maintain`**, the nightly job run as the owner. It keeps monthly partitions three months
-  ahead and drops outbox months that are wholly published and past retention.
-- **`--fga-sync`**, with `Authorization:OpenFga:Bootstrap=true`, creates the OpenFGA store if it
-  is missing, writes `authorization/model.json` and rewrites every tuple from the tables.
+  3. With a `Provision` section configured: creates the first tenant, its properties and its administrators. It is idempotent, with ids derived from natural keys. Admins get an Entra object id, or an email and a temporary password.
+- **`--maintain`**, the nightly partition and outbox housekeeping, run as the owner role.
+- **`--fga-sync`**, OpenFGA mode only: creates the store if it is missing, writes the model and rewrites every tuple. In Local mode it is a no-op.
 
-**Attaching to OpenFGA.** A deployed instance never writes a model. It attaches to the store by
-name (`Authorization:OpenFga:StoreName`, default `spms`) and pins the latest model once, at
-start-up. A model therefore changes only when a release runs `--fga-sync`.
+The three jobs are App Service WebJobs published with the API (`App_Data/jobs/triggered`). `web.config` files handle SPA deep links and no-cache entry points for the front end, and turn off dynamic compression so the board's event stream flows.
 
-**Staff sign-in.** A staff member signs in once linked to their Entra account:
-`POST /staff/{id}/sign-in` with `{ objectId, email }`, or **Staff → Profile → Give sign-in**.
-Linking needs `can_propose_role`, and the link is audited. After that, their roles can be
-approved. Provisioning links the first administrators.
-
-`infra/api.bicep` and `infra/openfga.bicep` are the scripted alternative: Container Apps for
-the API, and Key Vault for the secrets. They compile in CI but are not what the runbook uses.
+`infra/api.bicep` and `infra/openfga.bicep` are the scripted Container Apps alternative, with Entra and an OpenFGA server.
 
 ---
 

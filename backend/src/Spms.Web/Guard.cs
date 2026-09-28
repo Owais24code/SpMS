@@ -48,7 +48,7 @@ public static class Guard
             return Problem.From(ApiError.AuthenticationRequired, ctx.CorrelationId, "Present a bearer token.");
         try
         {
-            var d = await access.CheckAsync(new AccessCheck(Fga.User(principal), relation, @object, contextual, context, strong), ct);
+            var d = await access.CheckAsync(new AccessCheck(Fga.User(principal), relation, @object, contextual, context, strong, ctx.TenantId), ct);
             return d.Allowed
                 ? null
                 : Problem.From(ApiError.AuthorizationDenied, ctx.CorrelationId, $"You do not have {relation} on this record.");

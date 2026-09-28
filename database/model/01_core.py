@@ -56,19 +56,24 @@ table(S, "principal", AGGREGATE, TENANT, key=None, source_cols=False, handoff="n
 
 table(S, "principal_login", AGGREGATE, TENANT, key=None, source_cols=False,
       handoff="new (replaces workforce.provider_identity and core.service_identity)",
-      spec="§24 OIDC/SSO, MFA, service accounts; §Security and audit (no password rows)",
-      doc="An external identity that signs in as a principal: Entra user (oid) or client-credentials app.",
+      spec="§24 OIDC/SSO, MFA, service accounts; §Security and audit; local email + password sign-in (no Entra)",
+      doc="An identity that signs in as a principal: Entra user (oid), client-credentials app, or a local email + password account.",
       statuses=["Active", "Disabled", "Locked"],
       cols=[
           col("principal_id", "uuid", fk="core.principal"),
-          col("login_type", "text", check="login_type IN ('EntraUser', 'EntraApplication')"),
+          col("login_type", "text", check="login_type IN ('EntraUser', 'EntraApplication', 'Local')"),
           col("idp_issuer", "text"),
-          col("idp_subject", "text", doc="Entra object id (oid) or application object id"),
+          col("idp_subject", "text", doc="Entra object id (oid), application object id, or the lower-cased email of a local account"),
           col("username", "text", null=True),
           col("mfa_required", "boolean", default="true"),
           col("credential_rotated_at", "timestamptz", null=True),
           col("last_authenticated_at", "timestamptz", null=True),
+          col("password_hash", "text", null=True, doc="Local accounts only: PBKDF2-SHA256, salted, iteration count in the value; never the password"),
+          col("must_change_password", "boolean", default="false", doc="a temporary password set by an administrator must be replaced at next sign-in"),
+          col("failed_attempts", "integer", default="0", check="failed_attempts >= 0"),
+          col("locked_until", "timestamptz", null=True, doc="set after repeated wrong passwords; sign-in refused until then"),
       ],
+      checks=[("local_has_password", "(login_type = 'Local') = (password_hash IS NOT NULL)")],
       uniques=[("subject_uq", "idp_issuer, idp_subject")])
 
 table(S, "device_registration", AGGREGATE, PROPERTY, key=None, source_cols=False, handoff="new",

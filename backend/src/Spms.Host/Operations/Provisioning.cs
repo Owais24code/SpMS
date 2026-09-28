@@ -11,7 +11,8 @@ namespace Spms.Host.Operations;
 ///
 ///   Provision:Tenant:Code / Name / DataRegion / Currency
 ///   Provision:Properties:0:Code / Name / Timezone / Currency
-///   Provision:Admins:0:ObjectId / Name / Email / Roles:0..
+///   Provision:Admins:0:ObjectId / Name / Email / Roles:0..     (Entra sign-in)
+///   Provision:Admins:0:Email / Name / Password / Roles:0..     (local email + password sign-in)
 ///   Provision:Issuer   (default: Auth:ValidIssuers:0, else Auth:Authority)
 /// </summary>
 public sealed class ProvisionOptions
@@ -39,9 +40,12 @@ public sealed class ProvisionOptions
 
     public sealed class AdminSpec
     {
+        /// <summary>Entra sign-in: the person's Entra object id.</summary>
         public string? ObjectId { get; set; }
         public string? Name { get; set; }
         public string? Email { get; set; }
+        /// <summary>Local sign-in (no Entra): an initial password, to be changed at first sign-in. Needs Email.</summary>
+        public string? Password { get; set; }
         /// <summary>Tenant-wide roles. Default: platform_admin, spa_manager and configuration_approver (two admins then approve each other's changes).</summary>
         public List<string> Roles { get; set; } = [];
     }
@@ -108,26 +112,36 @@ public static class Provisioning
 
         foreach (var a in o.Admins)
         {
-            var subject = a.ObjectId!.Trim().ToLowerInvariant();
+            var isLocal = string.IsNullOrWhiteSpace(a.ObjectId);
+            var loginIssuer = isLocal ? Identity.LocalSessionIssuer.Issuer : issuer;
+            var subject = isLocal ? Identity.Passwords.Subject(a.Email!) : a.ObjectId!.Trim().ToLowerInvariant();
             // Already signed in to SpMS (linked here earlier, or in the app): leave that person exactly as they are.
             await using (var existing = new NpgsqlCommand("SELECT 1 FROM core.principal_login WHERE idp_issuer = @i AND idp_subject = @s", conn, tx))
             {
-                existing.Parameters.AddWithValue("i", issuer);
+                existing.Parameters.AddWithValue("i", loginIssuer);
                 existing.Parameters.AddWithValue("s", subject);
                 if (await existing.ExecuteScalarAsync(ct) is not null) continue;
             }
 
-            var principal = Id("principal", $"{issuer}/{subject}");
-            var staff = Id("staff", $"{issuer}/{subject}");
+            var principal = Id("principal", $"{loginIssuer}/{subject}");
+            var staff = Id("staff", $"{loginIssuer}/{subject}");
             await Exec(conn, tx, """
                 INSERT INTO core.principal (principal_id, tenant_id, principal_type, display_name)
                 VALUES (@id, @t, 'Staff', @name) ON CONFLICT DO NOTHING
                 """, ct, ("id", principal), ("t", tenant), ("name", a.Name!));
-            await Exec(conn, tx, """
-                INSERT INTO core.principal_login (principal_login_id, tenant_id, principal_id, login_type, idp_issuer, idp_subject, username)
-                VALUES (@id, @t, @p, 'EntraUser', @i, @s, @u)
-                """, ct, ("id", Id("login", $"{issuer}/{subject}")), ("t", tenant), ("p", principal), ("i", issuer), ("s", subject),
-                ("u", (object?)a.Email ?? DBNull.Value));
+            if (isLocal)
+                await Exec(conn, tx, """
+                    INSERT INTO core.principal_login (principal_login_id, tenant_id, principal_id, login_type, idp_issuer, idp_subject, username,
+                                                      mfa_required, password_hash, must_change_password, credential_rotated_at)
+                    VALUES (@id, @t, @p, 'Local', @i, @s, @u, false, @h, true, now())
+                    """, ct, ("id", Id("login", $"{loginIssuer}/{subject}")), ("t", tenant), ("p", principal), ("i", loginIssuer), ("s", subject),
+                    ("u", a.Email!.Trim()), ("h", Identity.Passwords.Hash(a.Password!)));
+            else
+                await Exec(conn, tx, """
+                    INSERT INTO core.principal_login (principal_login_id, tenant_id, principal_id, login_type, idp_issuer, idp_subject, username)
+                    VALUES (@id, @t, @p, 'EntraUser', @i, @s, @u)
+                    """, ct, ("id", Id("login", $"{loginIssuer}/{subject}")), ("t", tenant), ("p", principal), ("i", loginIssuer), ("s", subject),
+                    ("u", (object?)a.Email ?? DBNull.Value));
             await Exec(conn, tx, """
                 INSERT INTO workforce.staff (staff_id, tenant_id, principal_id, preferred_name, bookable)
                 VALUES (@id, @t, @p, @name, false) ON CONFLICT DO NOTHING
@@ -164,8 +178,17 @@ public static class Provisioning
         if (o.Admins.Count == 0) problems.Add("At least one admin is required.");
         foreach (var a in o.Admins)
         {
-            if (!Guid.TryParse(a.ObjectId, out _)) problems.Add($"Admin '{a.Name}' needs an Entra object id (a GUID).");
             if (string.IsNullOrWhiteSpace(a.Name)) problems.Add("Every admin needs a name.");
+            if (!string.IsNullOrWhiteSpace(a.ObjectId))
+            {
+                if (!Guid.TryParse(a.ObjectId, out _)) problems.Add($"Admin '{a.Name}' needs an Entra object id (a GUID).");
+            }
+            else
+            {
+                // Local sign-in: an email to sign in with and an initial password (changed at first sign-in).
+                if (!Identity.Passwords.LooksLikeEmail(a.Email)) problems.Add($"Admin '{a.Name}' needs an Entra object id, or an Email and a Password.");
+                else if (Identity.Passwords.Problem(a.Password, a.Email) is { } p) problems.Add($"Admin '{a.Name}': {p}");
+            }
         }
         return problems;
 

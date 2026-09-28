@@ -14,9 +14,13 @@ public static class AuthorizationSetup
     {
         var options = config.GetSection("Authorization").Get<AuthorizationOptions>() ?? new AuthorizationOptions();
         var fgaConfigured = !string.IsNullOrWhiteSpace(options.OpenFga.ApiUrl);
+        var local = options.IsLocal;
 
-        if (!fgaConfigured && !env.IsDevelopment())
-            throw new InvalidOperationException("Authorization:OpenFga:ApiUrl is required outside Development (OpenFGA decides access; there is no fallback).");
+        if (options.Mode is not ("OpenFga" or "Local" or "Permissive"))
+            throw new InvalidOperationException($"Authorization:Mode '{options.Mode}' is not OpenFga, Local or Permissive.");
+        if (!local && !fgaConfigured && !env.IsDevelopment())
+            throw new InvalidOperationException(
+                "Authorization:OpenFga:ApiUrl is required outside Development, unless Authorization:Mode is Local (the model decided in-process).");
         if (options.Mode == "Permissive" && !env.IsDevelopment())
             throw new InvalidOperationException("Authorization:Mode=Permissive is refused outside Development.");
 
@@ -29,7 +33,10 @@ public static class AuthorizationSetup
         services.AddSingleton<Spms.Host.Operations.BoardFeed>();
         services.AddSingleton<IOutboxHandler, Spms.Host.Operations.BoardFeedHandler>();
 
-        if (fgaConfigured && options.Mode != "Permissive") services.AddSingleton<IAccessDecider, OpenFgaAccessDecider>();
+        services.AddSingleton<TenantTuples>();
+        services.AddSingleton<LocalAccessDecider>();
+        if (local) services.AddSingleton<IAccessDecider>(sp => sp.GetRequiredService<LocalAccessDecider>());
+        else if (fgaConfigured && options.Mode != "Permissive") services.AddSingleton<IAccessDecider, OpenFgaAccessDecider>();
         else services.AddSingleton<IAccessDecider, PermissiveAccessDecider>();
 
         var outbox = config.GetSection("Outbox").Get<OutboxOptions>() ?? new OutboxOptions();
@@ -39,11 +46,16 @@ public static class AuthorizationSetup
         return services;
     }
 
-    /// <summary>Development: bootstrap the OpenFGA store when asked, then reconcile every tuple from the tables.</summary>
+    /// <summary>OpenFGA: bootstrap the store when asked (else attach to it), then reconcile every tuple from the tables. Local: nothing to start.</summary>
     public static async Task StartAuthorizationAsync(this WebApplication app)
     {
         var holder = app.Services.GetRequiredService<FgaClientHolder>();
         var options = app.Services.GetRequiredService<OpenFgaOptions>();
+        if (app.Services.GetRequiredService<IAccessDecider>() is LocalAccessDecider)
+        {
+            app.Logger.LogInformation("Authorization is decided in-process from authorization/model.json and the SpMS tables (Mode=Local); no OpenFGA server is used.");
+            return;
+        }
         if (app.Services.GetRequiredService<IAccessDecider>() is PermissiveAccessDecider)
         {
             app.Logger.LogWarning("Authorization is PERMISSIVE: no OpenFGA server is configured, so relationship checks allow everything (Development only).");

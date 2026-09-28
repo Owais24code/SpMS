@@ -124,7 +124,7 @@ if (app.Configuration.GetValue("Database:MigrateOnStartup", false))
 // every migration applied, and the EF model identical to the live tables. An
 // instance that starts against a drifted schema would be systematically wrong
 // about whatever drifted.
-await SchemaGate.VerifyAsync(app.Services, ownerConnection, app.Logger);
+await SchemaGate.VerifyAsync(app.Services, ownerConnection, app.Logger, app.Configuration["Database:MigrationRole"] ?? "spms_owner");
 
 // `Spms.Host --maintain` is the scheduled database housekeeping (partitions
 // ahead, published outbox months dropped), run as the owner, then exit.
@@ -140,6 +140,11 @@ if (args.Contains("--maintain"))
 // store restore, or to repair drift), then exits.
 if (args.Contains("--fga-sync"))
 {
+    if (app.Services.GetRequiredService<Spms.Host.Authorization.AuthorizationOptions>().IsLocal)
+    {
+        app.Logger.LogInformation("Authorization:Mode is Local: relationships are read from the tables, there is no OpenFGA store to sync.");
+        return;
+    }
     await app.Services.GetRequiredService<Spms.Host.Authorization.FgaClientHolder>().BootstrapIfNeededAsync(app);
     await app.Services.GetRequiredService<Spms.Host.Authorization.FgaReconciler>().RunAsync();
     return;
@@ -196,6 +201,8 @@ app.UseAuthorization();
 
 app.MapMeta(app.Environment);
 app.MapMetrics(app.Environment, observability);
+// Local email + password accounts (no Entra): sign-in, sign-up, password change. Outside the request transaction.
+if (app.Configuration.GetValue("Auth:Local:Enabled", false)) Spms.Host.Identity.LocalAccountEndpoints.MapLocalAccounts(app);
 
 // Every module endpoint runs inside one scoped request transaction.
 var api = app.MapGroup("").AddEndpointFilter<RequestTransactionFilter>();
