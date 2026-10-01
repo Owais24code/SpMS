@@ -10,7 +10,7 @@
  * Entra later: authMode 'entra' plus  entra: { clientId, authority, apiScopes }  (see docs/deploy-azure-portal.md).
  */
 window.__SPMS_CONFIG__ = {
-  apiBaseUrl: 'https://<api-default-domain>',   // no trailing slash
+  apiBaseUrl: 'https://spms-api-fqhzcmagfxdsh9bn.centralindia-01.azurewebsites.net',   // no trailing slash
   useRealApi: true,
   authMode: 'local',
   // The codes given to Provision__Tenant__Code and Provision__Properties__0__Code.
